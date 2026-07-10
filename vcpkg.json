@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "opencv-practice",
+  "version": "1.0.0",
+  "builtin-baseline": "856505bb767458c99d8e3c3ed441f59a058d3687",
+  "dependencies": [
+    "onnxruntime-gpu",
+    {
+      "name": "opencv4",
+      "default-features": false,
+      "features": [
+        "world",
+        "calib3d",
+        "tiff",
+        "tbb",
+        "jpeg",
+        "png",
+        "thread",
+        "fs",
+        "intrinsics",
+        "highgui",
+        "dshow",
+        "msmf",
+        "win32ui"
+      ]
+    }
+  ]
+}

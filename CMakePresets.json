@@ -1,0 +1,31 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "vcpkg-base",
+      "hidden": true,
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug (vcpkg)",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release (vcpkg)",
+      "inherits": "vcpkg-base",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1280</width>
+    <height>820</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>OpenCV 学习工坊</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="rootLayout">
+    <property name="spacing">6</property>
+    <property name="leftMargin">8</property>
+    <property name="topMargin">8</property>
+    <property name="rightMargin">8</property>
+    <property name="bottomMargin">8</property>
+    <item>
+     <widget class="QSplitter" name="mainSplitter">
+      <property name="orientation">
+       <enum>Qt::Horizontal</enum>
+      </property>
+      <widget class="QWidget" name="leftPanel">
+       <layout class="QVBoxLayout" name="leftPanelLayout">
+        <property name="leftMargin">0</property>
+        <property name="topMargin">0</property>
+        <property name="rightMargin">0</property>
+        <property name="bottomMargin">0</property>
+        <item>
+         <layout class="QHBoxLayout" name="sourceModeLayout">
+          <item>
+           <widget class="QRadioButton" name="staticImageRadio">
+            <property name="text">
+             <string>静态图片</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QRadioButton" name="cameraRadio">
+            <property name="text">
+             <string>摄像头实时</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QPushButton" name="openImageButton">
+          <property name="text">
+           <string>打开图片...</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QListWidget" name="navList"/>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QSplitter" name="centerSplitter">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <widget class="QGroupBox" name="originalGroupBox">
+        <property name="title">
+         <string>原图</string>
+        </property>
+        <layout class="QVBoxLayout" name="originalGroupLayout">
+         <item>
+          <widget class="QLabel" name="originalImageLabel">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>150</width>
+             <height>150</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>请打开一张图片</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+       <widget class="QGroupBox" name="processedGroupBox">
+        <property name="title">
+         <string>处理结果</string>
+        </property>
+        <layout class="QVBoxLayout" name="processedGroupLayout">
+         <item>
+          <widget class="QLabel" name="processedImageLabel">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>150</width>
+             <height>150</height>
+            </size>
+           </property>
+           <property name="text">
+            <string/>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </widget>
+      <widget class="QWidget" name="rightPanel">
+       <layout class="QVBoxLayout" name="rightPanelLayout">
+        <property name="leftMargin">0</property>
+        <property name="topMargin">0</property>
+        <property name="rightMargin">0</property>
+        <property name="bottomMargin">0</property>
+        <item>
+         <widget class="QStackedWidget" name="paramsStack"/>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+    <item>
+     <widget class="QPlainTextEdit" name="infoText">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>16777215</width>
+        <height>110</height>
+       </size>
+      </property>
+      <property name="readOnly">
+       <bool>true</bool>
+      </property>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
