@@ -91,3 +91,15 @@ set_target_properties(OpenCVPractice
     ${CMAKE_BINARY_DIR}/bin
 
 )
+
+
+# =========================
+# 练习图片：构建后同步到可执行文件旁边，方便运行时定位
+# =========================
+
+add_custom_command(TARGET OpenCVPractice POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/test_data
+        $<TARGET_FILE_DIR:OpenCVPractice>/test_data
+    COMMENT "Copy test_data to output directory"
+)

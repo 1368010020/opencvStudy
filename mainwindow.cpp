@@ -13,6 +13,10 @@
 #include "fluentstyle.h"
 #include "opencvhelper.h"
 
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+
 #include <algorithm>
 
 namespace {
@@ -66,6 +70,7 @@ MainWindow::MainWindow(QWidget *parent)
     // 读取上一次图片目录
     m_lastOpenDir = m_settings->value("File/LastImageDirectory", QDir::homePath()).toString();
     ui->infoText->appendPlainText("OpenCV学习程序启动");
+    ui->infoText->appendPlainText("提示：选中左侧算子后，参数面板顶部会推荐一张最适合它的测试图，点一下就能加载");
 
     resize(m_settings->value("Window/Width", 1360).toInt(),
            m_settings->value("Window/Height", 860).toInt());
@@ -129,6 +134,39 @@ void MainWindow::selectTemplateImage()
     ui->infoText->appendPlainText("已加载模板图片: " + filename);
 
     applyCurrentOperation();
+}
+
+QString MainWindow::resolveTestDataPath(const QString &filename) const
+{
+    QDir dir(QCoreApplication::applicationDirPath());
+
+    for (int i = 0; i < 5; ++i) {
+        QString candidate = dir.filePath("test_data/" + filename);
+        if (QFile::exists(candidate))
+            return candidate;
+        if (!dir.cdUp())
+            break;
+    }
+
+    return QString();
+}
+
+void MainWindow::loadRecommendedImage(const QString &filename)
+{
+    if (m_cameraRadio->isChecked()) {
+        ui->infoText->appendPlainText("摄像头模式下无法加载图片文件，请先切回静态图片模式");
+        return;
+    }
+
+    QString path = resolveTestDataPath(filename);
+    if (path.isEmpty()) {
+        ui->infoText->appendPlainText(
+            QString("未找到推荐素材 %1，请确认 test_data 目录已随程序分发，或用『打开图片』手动选图")
+                .arg(filename));
+        return;
+    }
+
+    showImage(path);
 }
 
 void MainWindow::buildNavList()
@@ -557,21 +595,40 @@ QSlider *MainWindow::addSliderRow(QWidget *page, QVBoxLayout *layout, const QStr
 
 void MainWindow::buildParamPanels()
 {
-    auto makePage = [this](const QString &hint) -> QWidget * {
+    // principle：原理说明（复用之前的文案）；scenario：现实应用场景，一句话；
+    // recommendedImage：test_data 里最适合演示这个算子的素材文件名，页面顶部会生成一个可点击的加载按钮。
+    auto makePage = [this](const QString &principle, const QString &scenario,
+                            const QString &recommendedImage) -> QWidget * {
         QWidget *page = new QWidget(ui->paramsStack);
         QVBoxLayout *layout = new QVBoxLayout(page);
 
-        QLabel *hintLabel = new QLabel(hint, page);
-        hintLabel->setProperty("role", "hint");
-        hintLabel->setWordWrap(true);
-        layout->addWidget(hintLabel);
+        if (!recommendedImage.isEmpty()) {
+            QPushButton *recommendButton = new QPushButton(
+                QString("加载推荐图片: %1").arg(recommendedImage), page);
+            recommendButton->setProperty("variant", "secondary");
+            connect(recommendButton, &QPushButton::clicked, this,
+                    [this, recommendedImage] { loadRecommendedImage(recommendedImage); });
+            layout->addWidget(recommendButton);
+        }
+
+        QLabel *principleLabel = new QLabel(principle, page);
+        principleLabel->setProperty("role", "hint");
+        principleLabel->setWordWrap(true);
+        layout->addWidget(principleLabel);
+
+        QLabel *scenarioLabel = new QLabel("应用场景：" + scenario, page);
+        scenarioLabel->setProperty("role", "scenario");
+        scenarioLabel->setWordWrap(true);
+        layout->addWidget(scenarioLabel);
 
         return page;
     };
 
     // Original 原图
     {
-        QWidget *page = makePage("显示未经任何处理的原始图像，用作对比基准。");
+        QWidget *page = makePage("显示未经任何处理的原始图像，用作对比基准。",
+                                  "任何图像处理流程的起点，用来和后续每一步效果做对比。",
+                                  "pexels-724211268-34685018.jpg");
         static_cast<QVBoxLayout *>(page->layout())->addStretch();
         ui->paramsStack->addWidget(page);
     }
@@ -579,7 +636,9 @@ void MainWindow::buildParamPanels()
     // Invert 反转
     {
         QWidget *page = makePage(
-            "cv::bitwise_not：对每个像素按位取反，即 255 - pixel，得到底片效果，无可调参数。");
+            "cv::bitwise_not：对每个像素按位取反，即 255 - pixel，得到底片效果，无可调参数。",
+            "医学影像底片阅读、扫描文档负片校正、复古/艺术风格滤镜。",
+            "pexels-724211268-34685018.jpg");
         static_cast<QVBoxLayout *>(page->layout())->addStretch();
         ui->paramsStack->addWidget(page);
     }
@@ -587,7 +646,9 @@ void MainWindow::buildParamPanels()
     // Gray 灰度化
     {
         QWidget *page = makePage(
-            "cv::cvtColor(COLOR_BGR2GRAY)：按加权公式把 BGR 三通道合成单通道灰度值，无可调参数。");
+            "cv::cvtColor(COLOR_BGR2GRAY)：按加权公式把 BGR 三通道合成单通道灰度值，无可调参数。",
+            "几乎所有图像算法的第一步预处理，减少数据量、加快后续计算（阈值/边缘/特征检测都基于灰度图）。",
+            "pexels-724211268-34685018.jpg");
         static_cast<QVBoxLayout *>(page->layout())->addStretch();
         ui->paramsStack->addWidget(page);
     }
@@ -595,7 +656,9 @@ void MainWindow::buildParamPanels()
     // Threshold 二值化
     {
         QWidget *page = makePage(
-            "cv::threshold：先转灰度，再按阈值把像素分成纯黑/纯白两类，用于分割前景背景。");
+            "cv::threshold：先转灰度，再按阈值把像素分成纯黑/纯白两类，用于分割前景背景。",
+            "文档扫描二值化、验证码字符分割、工业零件轮廓提取前的预处理。",
+            "text_binary.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *valueLabel = nullptr;
         m_thresholdSlider = addSliderRow(page, layout, "阈值", 0, 255, 128, &valueLabel);
@@ -606,7 +669,9 @@ void MainWindow::buildParamPanels()
     // GaussianBlur 高斯模糊
     {
         QWidget *page = makePage(
-            "cv::GaussianBlur：用高斯核对邻域像素加权平均，核越大/Sigma越大越模糊，常用于降噪、预处理。");
+            "cv::GaussianBlur：用高斯核对邻域像素加权平均，核越大/Sigma越大越模糊，常用于降噪、预处理。",
+            "拍照虚化背景、边缘检测/特征提取前的降噪预处理、简单的隐私打码。",
+            "noisy_saltpepper_color.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         // 滑块范围 0-15，映射为奇数核大小 1-31
@@ -625,7 +690,9 @@ void MainWindow::buildParamPanels()
     // MedianBlur 中值滤波
     {
         QWidget *page = makePage(
-            "cv::medianBlur：取邻域像素的中位数作为输出，对椒盐噪声（黑白噪点）特别有效，且能保留边缘。");
+            "cv::medianBlur：取邻域像素的中位数作为输出，对椒盐噪声（黑白噪点）特别有效，且能保留边缘。",
+            "老照片/扫描件的噪点修复、传感器椒盐噪声清理，比高斯模糊更能保住边缘细节。",
+            "noisy_saltpepper_color.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         // 滑块范围 0-15，映射为奇数核大小 1-31
@@ -641,7 +708,9 @@ void MainWindow::buildParamPanels()
     // BilateralFilter 双边滤波
     {
         QWidget *page = makePage(
-            "cv::bilateralFilter：同时考虑空间距离和像素值差异做加权平均，能在去噪的同时较好地保留边缘，速度比高斯慢。");
+            "cv::bilateralFilter：同时考虑空间距离和像素值差异做加权平均，能在去噪的同时较好地保留边缘，速度比高斯慢。",
+            "人像磨皮美颜（保留五官边缘不糊）、卫星/遥感图像降噪。",
+            "noisy_saltpepper_color.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *diameterValueLabel = nullptr;
         QLabel *sigmaColorValueLabel = nullptr;
@@ -656,7 +725,9 @@ void MainWindow::buildParamPanels()
     // Erode 腐蚀
     {
         QWidget *page = makePage(
-            "cv::erode：用结构元素在图像上滑动，取邻域最小值，使前景区域收缩，可去除小噪点。");
+            "cv::erode：用结构元素在图像上滑动，取邻域最小值，使前景区域收缩，可去除小噪点。",
+            "OCR 前清理文字笔画上的毛刺噪点、指纹/条码图像的细化预处理。",
+            "text_binary.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         QLabel *iterValueLabel = nullptr;
@@ -669,7 +740,9 @@ void MainWindow::buildParamPanels()
     // Dilate 膨胀
     {
         QWidget *page = makePage(
-            "cv::dilate：与腐蚀相反，取邻域最大值，使前景区域扩张，可填补小孔洞、连接断裂区域。");
+            "cv::dilate：与腐蚀相反，取邻域最大值，使前景区域扩张，可填补小孔洞、连接断裂区域。",
+            "连接断裂的文字笔画/条形码竖线、让二值化后的目标区域更完整方便后续轮廓提取。",
+            "text_binary.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         QLabel *iterValueLabel = nullptr;
@@ -682,7 +755,9 @@ void MainWindow::buildParamPanels()
     // MorphOpen 开运算
     {
         QWidget *page = makePage(
-            "cv::morphologyEx(MORPH_OPEN)：先腐蚀后膨胀，能去掉前景上的小噪点，同时比单独腐蚀更好地保持整体形状。");
+            "cv::morphologyEx(MORPH_OPEN)：先腐蚀后膨胀，能去掉前景上的小噪点，同时比单独腐蚀更好地保持整体形状。",
+            "工业质检里去掉图像上的细小毛刺/噪点，同时不破坏被检测零件的整体轮廓。",
+            "text_binary.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         QLabel *iterValueLabel = nullptr;
@@ -695,7 +770,9 @@ void MainWindow::buildParamPanels()
     // MorphClose 闭运算
     {
         QWidget *page = makePage(
-            "cv::morphologyEx(MORPH_CLOSE)：先膨胀后腐蚀，能填补前景内部的小孔洞、连接断裂的相邻区域。");
+            "cv::morphologyEx(MORPH_CLOSE)：先膨胀后腐蚀，能填补前景内部的小孔洞、连接断裂的相邻区域。",
+            "补全扫描文档里断掉的笔画/表格线、修复分割结果里的小空洞。",
+            "text_binary.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         QLabel *iterValueLabel = nullptr;
@@ -708,7 +785,9 @@ void MainWindow::buildParamPanels()
     // MorphGradient 形态学梯度
     {
         QWidget *page = makePage(
-            "cv::morphologyEx(MORPH_GRADIENT)：膨胀结果减去腐蚀结果，恰好勾勒出前景物体的边界轮廓线。");
+            "cv::morphologyEx(MORPH_GRADIENT)：膨胀结果减去腐蚀结果，恰好勾勒出前景物体的边界轮廓线。",
+            "快速提取二值图像的物体轮廓线，常作为轮廓检测前的一步快速预览。",
+            "text_binary.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         m_morphGradientKernelSlider = addSliderRow(page, layout, "核大小", 1, 15, 3, &kernelValueLabel);
@@ -719,7 +798,9 @@ void MainWindow::buildParamPanels()
     // TopHat 顶帽
     {
         QWidget *page = makePage(
-            "cv::morphologyEx(MORPH_TOPHAT)：原图减去开运算结果，突出比周围背景更亮、比结构元素更小的细节。");
+            "cv::morphologyEx(MORPH_TOPHAT)：原图减去开运算结果，突出比周围背景更亮、比结构元素更小的细节。",
+            "不均匀光照下提取小的高亮瑕疵，比如印刷电路板上的亮点缺陷检测。",
+            "text_binary.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         m_topHatKernelSlider = addSliderRow(page, layout, "核大小", 1, 15, 9, &kernelValueLabel);
@@ -730,7 +811,9 @@ void MainWindow::buildParamPanels()
     // BlackHat 黑帽
     {
         QWidget *page = makePage(
-            "cv::morphologyEx(MORPH_BLACKHAT)：闭运算结果减去原图，突出比周围背景更暗、比结构元素更小的细节。");
+            "cv::morphologyEx(MORPH_BLACKHAT)：闭运算结果减去原图，突出比周围背景更暗、比结构元素更小的细节。",
+            "提取比背景暗的小瑕疵，比如布料/纸张表面的小污渍、裂纹检测。",
+            "text_binary.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         m_blackHatKernelSlider = addSliderRow(page, layout, "核大小", 1, 15, 9, &kernelValueLabel);
@@ -742,7 +825,9 @@ void MainWindow::buildParamPanels()
     {
         QWidget *page = makePage(
             "cv::cvtColor(BGR2HSV)：色相(H)/饱和度(S)/明度(V) 是另一套三通道坐标系。这里故意不转回BGR，"
-            "直接把 H/S/V 当成 R/G/B 显示成伪彩图，帮助建立“HSV 不是普通颜色”的直觉，无可调参数。");
+            "直接把 H/S/V 当成 R/G/B 显示成伪彩图，帮助建立“HSV 不是普通颜色”的直觉，无可调参数。",
+            "几乎所有基于颜色做识别/追踪的项目（分拣、追踪、抠图）都先转到 HSV 空间再处理，比直接用 BGR 更稳定。",
+            "shapes_color.png");
         static_cast<QVBoxLayout *>(page->layout())->addStretch();
         ui->paramsStack->addWidget(page);
     }
@@ -751,7 +836,9 @@ void MainWindow::buildParamPanels()
     {
         QWidget *page = makePage(
             "cv::inRange：在 HSV 空间按 H/S/V 范围筛选像素做掩码，再和原图做按位与，只保留命中颜色范围的区域，"
-            "其余变黑。默认范围圈的是绿色，可以打开 shapes_color.png 试试抠出绿色多边形。");
+            "其余变黑。默认范围圈的是绿色，加载推荐图片后能直接看到绿色多边形被抠出来。",
+            "颜色识别与追踪（红绿灯识别、流水线色块分拣、绿幕抠图、循迹机器人找色块路径）。",
+            "shapes_color.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *hLowLabel = nullptr;
         QLabel *hHighLabel = nullptr;
@@ -772,7 +859,9 @@ void MainWindow::buildParamPanels()
     // RotateScale 旋转缩放
     {
         QWidget *page = makePage(
-            "cv::getRotationMatrix2D + cv::warpAffine：绕图像中心生成旋转+缩放的仿射矩阵，再做仿射变换，是几何变换的基础套路。");
+            "cv::getRotationMatrix2D + cv::warpAffine：绕图像中心生成旋转+缩放的仿射矩阵，再做仿射变换，是几何变换的基础套路。",
+            "深度学习训练集数据增强（旋转扩充样本）、扫描文档纠偏、图像拼贴排版。",
+            "shapes_color.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *angleValueLabel = nullptr;
         QLabel *scaleValueLabel = nullptr;
@@ -785,7 +874,9 @@ void MainWindow::buildParamPanels()
     // EqualizeHist 直方图均衡化
     {
         QWidget *page = makePage(
-            "cv::equalizeHist：把灰度直方图拉伸到均匀分布，增强全局对比度，适合整体偏暗/偏亮的图片，无可调参数。");
+            "cv::equalizeHist：把灰度直方图拉伸到均匀分布，增强全局对比度，适合整体偏暗/偏亮的图片，无可调参数。",
+            "逆光/雾天照片增强、老旧监控画面提升可视性、医学X光片对比度增强。",
+            "low_contrast_scene.png");
         static_cast<QVBoxLayout *>(page->layout())->addStretch();
         ui->paramsStack->addWidget(page);
     }
@@ -793,7 +884,9 @@ void MainWindow::buildParamPanels()
     // CLAHE 自适应均衡
     {
         QWidget *page = makePage(
-            "cv::CLAHE：分块做直方图均衡并限制对比度放大倍数，避免普通均衡化放大噪声，比 equalizeHist 更精细。");
+            "cv::CLAHE：分块做直方图均衡并限制对比度放大倍数，避免普通均衡化放大噪声，比 equalizeHist 更精细。",
+            "医学影像（CT/眼底照片）增强、夜视监控画面增强，比全局均衡化更不容易引入噪声。",
+            "low_contrast_scene.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *clipValueLabel = nullptr;
         QLabel *tileValueLabel = nullptr;
@@ -812,7 +905,9 @@ void MainWindow::buildParamPanels()
     // Sobel 梯度
     {
         QWidget *page = makePage(
-            "cv::Sobel：分别求 x、y 方向的一阶梯度并合成，凸显亮度变化剧烈的区域，是很多边缘算法的基础。");
+            "cv::Sobel：分别求 x、y 方向的一阶梯度并合成，凸显亮度变化剧烈的区域，是很多边缘算法的基础。",
+            "工业零件边缘检测、图像锐化前的梯度分析、车道线检测的前置步骤。",
+            "edge_pattern.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         // 滑块 0-3，映射为核大小 1/3/5/7
@@ -828,7 +923,9 @@ void MainWindow::buildParamPanels()
     // Laplacian
     {
         QWidget *page = makePage(
-            "cv::Laplacian：二阶导数算子，对孤立点和细线更敏感，常用于图像锐化和边缘检测。");
+            "cv::Laplacian：二阶导数算子，对孤立点和细线更敏感，常用于图像锐化和边缘检测。",
+            "图像锐化（拉普拉斯锐化）、显微图像里的细小结构/裂纹检测。",
+            "edge_pattern.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *kernelValueLabel = nullptr;
         m_laplacianKernelSlider = addSliderRow(page, layout, "核大小", 0, 3, 1, &kernelValueLabel);
@@ -843,7 +940,9 @@ void MainWindow::buildParamPanels()
     // Canny 边缘
     {
         QWidget *page = makePage(
-            "cv::Canny：基于梯度的边缘检测，双阈值做滞后阈值处理，高于高阈值判定为边缘，低于低阈值舍弃。");
+            "cv::Canny：基于梯度的边缘检测，双阈值做滞后阈值处理，高于高阈值判定为边缘，低于低阈值舍弃。",
+            "自动驾驶车道线/障碍物边缘提取、OCR前的文字边界定位、工业零件尺寸检测。",
+            "edge_pattern.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *lowValueLabel = nullptr;
         QLabel *highValueLabel = nullptr;
@@ -856,7 +955,9 @@ void MainWindow::buildParamPanels()
     // HoughLines 霍夫直线
     {
         QWidget *page = makePage(
-            "cv::HoughLinesP：先 Canny 提取边缘，再用概率霍夫变换在边缘点里投票找直线段，绿色线即检测结果。");
+            "cv::HoughLinesP：先 Canny 提取边缘，再用概率霍夫变换在边缘点里投票找直线段，绿色线即检测结果。",
+            "车道线检测、文档/表格扫描件里提取表格线、建筑图纸线条提取。",
+            "checkerboard.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *thresholdLabel = nullptr;
         QLabel *minLengthLabel = nullptr;
@@ -871,7 +972,9 @@ void MainWindow::buildParamPanels()
     // HoughCircles 霍夫圆
     {
         QWidget *page = makePage(
-            "cv::HoughCircles：基于梯度信息的霍夫圆变换，在灰度图上直接检测圆形，橙色圆周+红色圆心为检测结果。");
+            "cv::HoughCircles：基于梯度信息的霍夫圆变换，在灰度图上直接检测圆形，橙色圆周+红色圆心为检测结果。",
+            "硬币/瞳孔/圆形零件的计数与定位、井盖/圆形交通标志检测。",
+            "shapes_color.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *minDistLabel = nullptr;
         QLabel *param1Label = nullptr;
@@ -890,7 +993,9 @@ void MainWindow::buildParamPanels()
     // AdaptiveThreshold 自适应阈值
     {
         QWidget *page = makePage(
-            "cv::adaptiveThreshold：每个像素的阈值由其邻域计算得出，而不是整张图用同一个阈值，适合光照不均匀的图片。");
+            "cv::adaptiveThreshold：每个像素的阈值由其邻域计算得出，而不是整张图用同一个阈值，适合光照不均匀的图片。",
+            "手机拍文档时光照不均的场景（比如一角有阴影），比全局阈值稳定得多，是移动扫描类App的核心算法之一。",
+            "low_contrast_scene.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *blockValueLabel = nullptr;
         QLabel *cValueLabel = nullptr;
@@ -909,7 +1014,9 @@ void MainWindow::buildParamPanels()
     // OtsuThreshold Otsu自动阈值
     {
         QWidget *page = makePage(
-            "cv::threshold + THRESH_OTSU：根据灰度直方图自动计算全局最优分割阈值，无需手动指定阈值，适合双峰分布明显的图片。");
+            "cv::threshold + THRESH_OTSU：根据灰度直方图自动计算全局最优分割阈值，无需手动指定阈值，适合双峰分布明显的图片。",
+            "医学细胞/血液图像的前景背景快速分割、批量处理图片时省去人工调阈值的成本。",
+            "text_binary.png");
         static_cast<QVBoxLayout *>(page->layout())->addStretch();
         ui->paramsStack->addWidget(page);
     }
@@ -918,7 +1025,9 @@ void MainWindow::buildParamPanels()
     {
         QWidget *page = makePage(
             "cv::ORB：结合 FAST 角点检测 + BRIEF 描述子的快速特征点算法，圆圈大小反映特征尺度、"
-            "线段方向反映主方向，常用于图像匹配、拼接、SLAM。");
+            "线段方向反映主方向，常用于图像匹配、拼接、SLAM。",
+            "全景图拼接、以图搜图、AR标记识别、机器人/无人机视觉SLAM定位，都以关键点+描述子为基础。",
+            "pexels-724211268-34685018.jpg");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *featuresLabel = nullptr;
         m_orbFeaturesSlider = addSliderRow(page, layout, "特征点数量", 50, 2000, 500, &featuresLabel);
@@ -930,7 +1039,9 @@ void MainWindow::buildParamPanels()
     {
         QWidget *page = makePage(
             "cv::matchTemplate：在原图上滑动模板计算相似度，取最高分位置画框。未手动选模板时，自动取原图"
-            "中心一块裁剪当模板，方便直接看到效果；点下面按钮可以换成任意一张图片作为模板。");
+            "中心一块裁剪当模板，方便直接看到效果；点下面按钮可以换成任意一张图片作为模板。",
+            "工业产线上定位固定形状的零件位置、UI自动化测试里的\"找图点击\"、简单场景下的单目标跟踪。",
+            "shapes_color.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *cropLabel = nullptr;
         m_templateCropPercentSlider = addSliderRow(page, layout, "自动裁剪比例%", 10, 50, 25, &cropLabel);
@@ -952,7 +1063,9 @@ void MainWindow::buildParamPanels()
     {
         QWidget *page = makePage(
             "cv::pyrDown / cv::pyrUp：反复降采样再升采样回原尺寸，层数越多损失的细节越多、图像越模糊，"
-            "这是构建多分辨率图像金字塔（用于图像缩放、特征匹配、图像融合等）的基本操作。");
+            "这是构建多分辨率图像金字塔（用于图像缩放、特征匹配、图像融合等）的基本操作。",
+            "多尺度目标检测（先在小图上粗筛再回原图精定位）、图像压缩传输、拉普拉斯金字塔图像融合。",
+            "pexels-724211268-34685018.jpg");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *levelLabel = nullptr;
         m_pyramidLevelSlider = addSliderRow(page, layout, "层数", 0, 4, 2, &levelLabel);
@@ -963,7 +1076,9 @@ void MainWindow::buildParamPanels()
     // Contours 轮廓检测
     {
         QWidget *page = makePage(
-            "cv::findContours：先用 Otsu 自动二值化，再提取外部轮廓；绿色线为轮廓，橙色框为外接矩形，可用最小面积过滤掉噪点小轮廓。");
+            "cv::findContours：先用 Otsu 自动二值化，再提取外部轮廓；绿色线为轮廓，橙色框为外接矩形，可用最小面积过滤掉噪点小轮廓。",
+            "物体计数（比如统计零件/细胞数量）、形状识别、OCR前的字符分割、产线缺陷检测。",
+            "shapes_color.png");
         QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
         QLabel *minAreaValueLabel = nullptr;
         m_contourMinAreaSlider = addSliderRow(page, layout, "最小面积", 0, 2000, 100, &minAreaValueLabel);
@@ -1083,18 +1198,20 @@ void MainWindow::showEvent(QShowEvent *event)
 
         QString lastImage = m_settings->value("File/LastImagePath", "").toString();
 
-        if (lastImage.isEmpty()) {
+        if (!lastImage.isEmpty() && QFileInfo::exists(lastImage)) {
+            showImage(lastImage);
+            ui->infoText->appendPlainText("恢复上次图片:" + lastImage);
             return;
         }
 
-        QFileInfo info(lastImage);
-
-        // 判断图片是否还存在
-        if (info.exists()) {
-            showImage(lastImage);
-            ui->infoText->appendPlainText("恢复上次图片:" + lastImage);
-        } else {
+        if (!lastImage.isEmpty())
             ui->infoText->appendPlainText("上次图片不存在:" + lastImage);
+
+        // 没有可恢复的图片时，自动加载一张示例图，避免界面空白
+        QString demoPath = resolveTestDataPath("pexels-724211268-34685018.jpg");
+        if (!demoPath.isEmpty()) {
+            showImage(demoPath);
+            ui->infoText->appendPlainText("已自动加载示例图片，随时可点『打开图片』换成你自己的图");
         }
     }
 }

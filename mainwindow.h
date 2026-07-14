@@ -104,6 +104,9 @@ private slots:
     // 模板匹配页面专属：选择模板图片
     void selectTemplateImage();
 
+    // 参数面板"加载推荐图片"按钮专属：加载 test_data 里的指定素材
+    void loadRecommendedImage(const QString &filename);
+
 private:
     Ui::MainWindow *ui;
 
@@ -122,6 +125,9 @@ private:
 
     // 构建所有算子的参数面板，塞进 ui->paramsStack，顺序对应 OperationType
     void buildParamPanels();
+
+    // 在 test_data 目录里查找推荐素材，找不到返回空字符串
+    QString resolveTestDataPath(const QString &filename) const;
 
     // 创建一个"滑块 + 数值标签"行，返回滑块指针；value 变化时自动刷新数值标签与处理结果
     QSlider *addSliderRow(QWidget *page, QVBoxLayout *layout, const QString &labelText,

@@ -78,6 +78,26 @@ inline QString styleSheet()
             color: #F0F0F0;
         }
 
+        /* ---- 次要按钮（如"加载推荐图片"）：描边风格，弱化于主按钮 ---- */
+        QPushButton[variant="secondary"] {
+            background-color: transparent;
+            color: #0078D4;
+            border: 1px solid #0078D4;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: left;
+        }
+
+        QPushButton[variant="secondary"]:hover {
+            background-color: #E1EEFB;
+        }
+
+        QPushButton[variant="secondary"]:pressed {
+            background-color: #CCE4F7;
+        }
+
         /* ---- 图片来源单选按钮 ---- */
         QRadioButton {
             color: #202020;
@@ -145,6 +165,13 @@ inline QString styleSheet()
 
         QLabel[role="value"] {
             color: #0078D4;
+            font-weight: 600;
+        }
+
+        /* ---- 应用场景说明：用绿色和"原理说明"的灰色区分开 ---- */
+        QLabel[role="scenario"] {
+            color: #107C10;
+            font-size: 12px;
             font-weight: 600;
         }
 
