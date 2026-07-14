@@ -117,7 +117,13 @@ private slots:
     // 保存当前处理结果到文件
     void saveResult();
 
+    // 打开 OpenCV 术语速查手册
+    void showTermsGlossary();
+
 private:
+    // 点击原图触发：按当前算子展示"点运算"公式代入或"邻域/卷积"数值网格
+    void showPixelInspector(int px, int py);
+
     Ui::MainWindow *ui;
 
     /*
@@ -177,6 +183,9 @@ private:
 
     // 保存处理结果按钮
     QPushButton *m_saveResultButton = nullptr;
+
+    // 术语手册按钮
+    QPushButton *m_glossaryButton = nullptr;
 
     /*
      * 各算子参数控件

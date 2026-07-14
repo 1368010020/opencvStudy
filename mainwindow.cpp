@@ -2,8 +2,11 @@
 #include "ui_mainwindow.h"
 
 #include <QDebug>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QImage>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -11,6 +14,8 @@
 #include <QResizeEvent>
 #include <QSizePolicy>
 #include <QStatusBar>
+#include <QTableWidget>
+#include <QTextBrowser>
 
 #include "fluentstyle.h"
 #include "opencvhelper.h"
@@ -20,6 +25,7 @@
 #include <QFile>
 
 #include <algorithm>
+#include <functional>
 
 namespace {
 // OperationType 存在 navList 每个条目的 Qt::UserRole 里
@@ -47,6 +53,12 @@ MainWindow::MainWindow(QWidget *parent)
     m_saveResultButton->setProperty("variant", "secondary");
     connect(m_saveResultButton, &QPushButton::clicked, this, &MainWindow::saveResult);
     ui->leftPanelLayout->insertWidget(2, m_saveResultButton);
+
+    // ---- 术语手册按钮：插在"保存结果"下面 ----
+    m_glossaryButton = new QPushButton("术语手册", ui->leftPanel);
+    m_glossaryButton->setProperty("variant", "secondary");
+    connect(m_glossaryButton, &QPushButton::clicked, this, &MainWindow::showTermsGlossary);
+    ui->leftPanelLayout->insertWidget(3, m_glossaryButton);
 
     // ---- 图片来源：静态图片 / 摄像头实时 ----
     m_staticImageRadio = ui->staticImageRadio;
@@ -1392,19 +1404,24 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     bool isProcessedLabel = (watched == ui->processedImageLabel);
 
     if (isOriginalLabel || isProcessedLabel) {
+        const cv::Mat &mat = isOriginalLabel ? m_originalMat : m_lastResultMat;
+        const QRect &pixmapRect = isOriginalLabel ? m_originalPixmapRect : m_processedPixmapRect;
+
+        // 把 label 里的鼠标坐标反算成原图/结果图上的像素坐标，越界返回 false
+        auto mapToPixel = [&](const QPoint &pos, int &outX, int &outY) -> bool {
+            if (mat.empty() || !pixmapRect.contains(pos))
+                return false;
+            double fx = static_cast<double>(pos.x() - pixmapRect.left()) / pixmapRect.width();
+            double fy = static_cast<double>(pos.y() - pixmapRect.top()) / pixmapRect.height();
+            outX = std::clamp(static_cast<int>(fx * mat.cols), 0, mat.cols - 1);
+            outY = std::clamp(static_cast<int>(fy * mat.rows), 0, mat.rows - 1);
+            return true;
+        };
+
         if (event->type() == QEvent::MouseMove) {
             auto *mouseEvent = static_cast<QMouseEvent *>(event);
-            const cv::Mat &mat = isOriginalLabel ? m_originalMat : m_lastResultMat;
-            const QRect &pixmapRect = isOriginalLabel ? m_originalPixmapRect : m_processedPixmapRect;
-
-            if (!mat.empty() && pixmapRect.contains(mouseEvent->pos())) {
-                double fx = static_cast<double>(mouseEvent->pos().x() - pixmapRect.left())
-                            / pixmapRect.width();
-                double fy = static_cast<double>(mouseEvent->pos().y() - pixmapRect.top())
-                            / pixmapRect.height();
-                int px = std::clamp(static_cast<int>(fx * mat.cols), 0, mat.cols - 1);
-                int py = std::clamp(static_cast<int>(fy * mat.rows), 0, mat.rows - 1);
-
+            int px, py;
+            if (mapToPixel(mouseEvent->pos(), px, py)) {
                 QString text;
                 if (mat.channels() == 1) {
                     int gray = mat.at<uchar>(py, px);
@@ -1415,7 +1432,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     cv::Mat hsvPixel;
                     cv::cvtColor(pixel, hsvPixel, cv::COLOR_BGR2HSV);
                     cv::Vec3b hsv = hsvPixel.at<cv::Vec3b>(0, 0);
-                    text = QString("像素(%1,%2)  BGR(%3,%4,%5)  HSV(%6,%7,%8)")
+                    text = QString("像素(%1,%2)  BGR(%3,%4,%5)  HSV(%6,%7,%8)  —— 点击原图可查看该点的运算细节")
                                .arg(px)
                                .arg(py)
                                .arg(bgr[0])
@@ -1431,6 +1448,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             }
         } else if (event->type() == QEvent::Leave) {
             statusBar()->clearMessage();
+        } else if (isOriginalLabel && event->type() == QEvent::MouseButtonPress) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            int px, py;
+            if (mapToPixel(mouseEvent->pos(), px, py))
+                showPixelInspector(px, py);
         }
     }
 
@@ -1455,4 +1477,372 @@ void MainWindow::saveResult()
         ui->infoText->appendPlainText("已保存: " + filename);
     else
         ui->infoText->appendPlainText("保存失败: " + filename);
+}
+
+void MainWindow::showTermsGlossary()
+{
+    static const QString html = QStringLiteral(R"(
+        <h2>OpenCV 术语速查手册</h2>
+        <p style="color:#666">面试复习用：按分类整理，斜体是常见追问点。</p>
+
+        <h3>图像基础</h3>
+        <p><b>像素 / 通道 (Pixel / Channel)</b>：一张彩色图每个像素由 B/G/R 三个通道的数值组成，
+        每个通道 0-255（8位）。<i>追问：为什么 OpenCV 默认是 BGR 而不是 RGB？（历史遗留，早期相机厂商的习惯）</i></p>
+        <p><b>ROI (Region of Interest)</b>：图像里你只关心的一小块矩形区域，OpenCV 里用 <code>Mat(Rect)</code> 直接切片，不拷贝数据（浅拷贝）。</p>
+        <p><b>掩码 (Mask)</b>：一张和原图同尺寸的单通道图，非0的位置表示"要处理"，配合 <code>copyTo</code>/<code>bitwise_and</code> 实现"只处理指定区域"。</p>
+
+        <h3>色彩空间</h3>
+        <p><b>HSV</b>：色相(Hue,0-179)/饱和度(Saturation)/明度(Value) 三个维度，比 BGR 更贴近人眼对"颜色"的直觉。
+        <i>追问：为什么颜色识别/追踪常转 HSV 而不直接用 BGR 做阈值？（BGR 三通道都会随光照亮度整体变化，同一个"红色"在暗光下三通道数值全变了；HSV 把亮度单独分离到 V 通道，H 通道对光照变化更稳定）</i></p>
+
+        <h3>滤波与卷积</h3>
+        <p><b>卷积核 / Kernel</b>：一个小矩阵（比如3x3），在图像上滑动，和覆盖到的像素做加权求和，得到输出像素值。</p>
+        <p><b>锚点 (Anchor)</b>：核在滑动时对齐到当前像素的参考点，默认是核的中心。</p>
+        <p><b>为什么核大小通常是奇数</b>：奇数核才有唯一的正中心像素，方便锚点对齐；偶数核中心在四个像素之间，没有单一锚点。</p>
+        <p><b>Sigma（高斯）</b>：控制高斯分布的"胖瘦"，Sigma 越大权重分布越平缓、模糊范围越大。</p>
+        <p><b>线性滤波 vs 非线性滤波</b>：高斯/均值模糊是加权求和（线性）；中值滤波取排序后的中间值（非线性），非线性滤波通常更擅长保边、抗椒盐噪声。
+        <i>追问：为什么中值滤波对椒盐噪声特别有效？（噪声点数值极端，排序后大概率被挤到两端，取中位数天然被过滤掉）</i></p>
+
+        <h3>形态学</h3>
+        <p><b>结构元素 (Structuring Element)</b>：形态学操作里的"核"，通常是矩形/十字/椭圆形状的 0/1 矩阵，决定了"邻域"的形状。</p>
+        <p><b>腐蚀 (Erode) / 膨胀 (Dilate)</b>：腐蚀取邻域最小值（前景收缩），膨胀取邻域最大值（前景扩张），二者是对偶运算。</p>
+        <p><b>开运算 (Open) = 先腐蚀后膨胀</b>：去掉前景上的小噪点，同时保持整体形状。</p>
+        <p><b>闭运算 (Close) = 先膨胀后腐蚀</b>：填补前景内部的小孔洞、连接断裂区域。
+        <i>追问：开运算和闭运算分别适合什么场景？（开=去噪点，闭=补空洞/连断线，记忆口诀：开运算先腐蚀会让小噪点先被"吃掉"再也补不回来）</i></p>
+
+        <h3>边缘与梯度</h3>
+        <p><b>一阶导数 (Sobel) vs 二阶导数 (Laplacian)</b>：Sobel 反映亮度变化的"快慢"（梯度），在边缘处取极值；
+        Laplacian 反映梯度的变化率，在边缘处过零点，对噪声更敏感、常用于锐化。</p>
+        <p><b>非极大值抑制 (NMS)</b>：Canny 边缘检测的一步，只保留梯度方向上局部最大的点，把粗边缘变成单像素细边缘。</p>
+        <p><b>双阈值 / 滞后阈值 (Hysteresis Thresholding)</b>：Canny 用高低两个阈值，高于高阈值直接判定为边缘，
+        低于低阈值直接舍弃，中间的点只有连到已确认边缘时才保留——避免边缘断断续续。</p>
+
+        <h3>阈值与分割</h3>
+        <p><b>全局阈值 vs 自适应阈值</b>：全局阈值整张图用同一个数字切割，光照不均匀时会失败；
+        自适应阈值给每个像素用它自己邻域算出的局部阈值，更抗光照不均。</p>
+        <p><b>Otsu 算法</b>：遍历所有可能阈值，让"前景类"和"背景类"的类间方差最大（等价于类内方差最小），
+        自动找出最优全局阈值，前提是直方图要有明显双峰。</p>
+
+        <h3>特征与关键点</h3>
+        <p><b>关键点 (Keypoint) vs 描述子 (Descriptor)</b>：关键点是"在哪"（坐标+尺度+方向），
+        描述子是"长什么样"（一串数字向量，用于和其他关键点做相似度匹配）。</p>
+        <p><b>ORB = FAST + BRIEF</b>：用 FAST 算法快速找角点当关键点，用 BRIEF（的旋转不变改进版）算描述子，
+        比 SIFT/SURF 快很多，是专利免费的替代方案。
+        <i>追问：ORB 和 SIFT 相比有什么劣势？（对尺度和噪声的鲁棒性通常不如 SIFT，但速度快得多，适合实时场景）</i></p>
+    )");
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("OpenCV 术语速查手册");
+    dialog.resize(620, 640);
+
+    QVBoxLayout *layout = new QVBoxLayout(&dialog);
+    QTextBrowser *browser = new QTextBrowser(&dialog);
+    browser->setHtml(html);
+    layout->addWidget(browser);
+
+    QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    layout->addWidget(buttons);
+
+    dialog.exec();
+}
+
+void MainWindow::showPixelInspector(int px, int py)
+{
+    if (m_originalMat.empty())
+        return;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QString("像素探索 - (%1, %2)").arg(px).arg(py));
+    QVBoxLayout *layout = new QVBoxLayout(&dialog);
+
+    cv::Vec3b originBgr = m_originalMat.at<cv::Vec3b>(py, px);
+    QLabel *headerLabel = new QLabel(
+        QString("点击像素 (%1, %2)　原图 BGR = (%3, %4, %5)")
+            .arg(px)
+            .arg(py)
+            .arg(originBgr[0])
+            .arg(originBgr[1])
+            .arg(originBgr[2]),
+        &dialog);
+    headerLabel->setWordWrap(true);
+    layout->addWidget(headerLabel);
+
+    if (!m_lastResultMat.empty() && px < m_lastResultMat.cols && py < m_lastResultMat.rows) {
+        QString outText;
+        if (m_lastResultMat.channels() == 1) {
+            outText = QString("当前算子实际输出（来自OpenCV计算结果）：灰度值 = %1")
+                          .arg(m_lastResultMat.at<uchar>(py, px));
+        } else {
+            cv::Vec3b outBgr = m_lastResultMat.at<cv::Vec3b>(py, px);
+            outText = QString("当前算子实际输出（来自OpenCV计算结果）：BGR = (%1, %2, %3)")
+                          .arg(outBgr[0])
+                          .arg(outBgr[1])
+                          .arg(outBgr[2]);
+        }
+        QLabel *outLabel = new QLabel(outText, &dialog);
+        outLabel->setWordWrap(true);
+        layout->addWidget(outLabel);
+    }
+
+    auto grayAt = [this](int x, int y) -> int {
+        if (x < 0 || y < 0 || x >= m_originalMat.cols || y >= m_originalMat.rows)
+            return -1;
+        cv::Vec3b bgr = m_originalMat.at<cv::Vec3b>(y, x);
+        return cvRound(0.114 * bgr[0] + 0.587 * bgr[1] + 0.299 * bgr[2]);
+    };
+
+    auto makeGrid = [&dialog](int rows, int cols,
+                               const std::function<QString(int, int)> &valueAt) -> QTableWidget * {
+        QTableWidget *table = new QTableWidget(rows, cols, &dialog);
+        table->horizontalHeader()->setVisible(false);
+        table->verticalHeader()->setVisible(false);
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->setSelectionMode(QAbstractItemView::NoSelection);
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                QTableWidgetItem *item = new QTableWidgetItem(valueAt(r, c));
+                item->setTextAlignment(Qt::AlignCenter);
+                table->setItem(r, c, item);
+            }
+        }
+        int cellSize = cols <= 7 ? 42 : 30;
+        for (int c = 0; c < cols; ++c)
+            table->setColumnWidth(c, cellSize);
+        for (int r = 0; r < rows; ++r)
+            table->setRowHeight(r, cellSize);
+        table->setFixedHeight(cellSize * rows + 4);
+        table->setFixedWidth(cellSize * cols + 4);
+        return table;
+    };
+
+    enum class InspectorKind { PointOp, NeighborhoodOp, NotApplicable };
+    InspectorKind kind = InspectorKind::NotApplicable;
+    switch (m_currentOp) {
+    case OperationType::Original:
+    case OperationType::Invert:
+    case OperationType::Gray:
+    case OperationType::Threshold:
+    case OperationType::HsvView:
+    case OperationType::ColorRange:
+    case OperationType::EqualizeHist:
+    case OperationType::CLAHE:
+    case OperationType::OtsuThreshold:
+        kind = InspectorKind::PointOp;
+        break;
+    case OperationType::GaussianBlur:
+    case OperationType::MedianBlur:
+    case OperationType::BilateralFilter:
+    case OperationType::Sobel:
+    case OperationType::Laplacian:
+    case OperationType::Erode:
+    case OperationType::Dilate:
+    case OperationType::MorphOpen:
+    case OperationType::MorphClose:
+    case OperationType::MorphGradient:
+    case OperationType::TopHat:
+    case OperationType::BlackHat:
+    case OperationType::AdaptiveThreshold:
+        kind = InspectorKind::NeighborhoodOp;
+        break;
+    default:
+        break;
+    }
+
+    QStringList relatedTerms;
+
+    if (kind == InspectorKind::PointOp) {
+        QString formula;
+        switch (m_currentOp) {
+        case OperationType::Original:
+            formula = "点运算：输出 = 输入，原样显示。";
+            break;
+        case OperationType::Invert:
+            formula = QString("点运算：output = 255 - input，每个通道独立计算，例如 B 通道: 255-%1=%2")
+                          .arg(originBgr[0])
+                          .arg(255 - originBgr[0]);
+            break;
+        case OperationType::Gray:
+            formula = "点运算：gray = 0.299*R + 0.587*G + 0.114*B，只用这一个像素的三个通道计算。";
+            break;
+        case OperationType::Threshold:
+            formula = "点运算：先转灰度，再和阈值比较，大于阈值输出255否则输出0，只看这一个像素的灰度值。";
+            break;
+        case OperationType::HsvView:
+            formula = "点运算：对这一个像素做 BGR→HSV 坐标转换，不看邻居。";
+            break;
+        case OperationType::ColorRange:
+            formula = "点运算：把这个像素的 HSV 值和你设的范围比较，在范围内保留、不在范围内变黑。";
+            break;
+        case OperationType::EqualizeHist:
+            formula = "点运算（但用的是全局LUT）：这个像素的灰度值查一张根据全图直方图算出的映射表得到新值，运算本身只看这一个值。";
+            break;
+        case OperationType::CLAHE:
+            formula = "点运算（但LUT是按局部小块算的）：比 equalizeHist 多一步先判断这个像素属于哪个小块，再查那个小块专属的映射表。";
+            break;
+        case OperationType::OtsuThreshold:
+            formula = "点运算：用（根据全图直方图自动算出的）阈值和这个像素的灰度值比较，运算本身只看这一个值。";
+            break;
+        default:
+            formula = "点运算：输出只取决于这一个像素的值。";
+            break;
+        }
+        QLabel *explainLabel = new QLabel("【点运算 Point Operation】\n" + formula, &dialog);
+        explainLabel->setWordWrap(true);
+        layout->addWidget(explainLabel);
+        relatedTerms << "像素 / 通道" << "全局阈值 vs 自适应阈值";
+
+    } else if (kind == InspectorKind::NeighborhoodOp) {
+        int kernelSize = 3;
+        cv::Mat weightKernel; // 空表示不展示第二个网格
+        QString weightNote;
+        bool isStructuring = false;
+
+        switch (m_currentOp) {
+        case OperationType::GaussianBlur: {
+            kernelSize = 2 * m_blurKernelSlider->value() + 1;
+            cv::Mat k1 = cv::getGaussianKernel(kernelSize, m_blurSigmaSlider->value(), CV_64F);
+            weightKernel = k1 * k1.t();
+            break;
+        }
+        case OperationType::Sobel: {
+            kernelSize = 2 * m_sobelKernelSlider->value() + 1;
+            cv::Mat kx, ky;
+            cv::getDerivKernels(kx, ky, 1, 0, kernelSize, false, CV_64F);
+            weightKernel = ky * kx.t();
+            break;
+        }
+        case OperationType::Laplacian: {
+            kernelSize = 2 * m_laplacianKernelSlider->value() + 1;
+            if (kernelSize == 3) {
+                weightKernel = (cv::Mat_<double>(3, 3) << 0, 1, 0, 1, -4, 1, 0, 1, 0);
+            } else {
+                weightNote = "该核大小下 OpenCV 用二阶 Sobel 近似实现，没有单一固定核；核大小切回默认值1可看经典3x3拉普拉斯核。";
+            }
+            break;
+        }
+        case OperationType::MedianBlur:
+            kernelSize = 2 * m_medianKernelSlider->value() + 1;
+            weightNote = "中值滤波没有固定权重：直接取邻域内排序后的中间值，不是加权求和。";
+            break;
+        case OperationType::BilateralFilter:
+            kernelSize = m_bilateralDiameterSlider->value();
+            weightNote = "双边滤波的权重是动态算出来的：同时看空间距离和颜色差异，每个像素的权重都不一样，没有固定核。";
+            break;
+        case OperationType::Erode:
+            kernelSize = m_erodeKernelSlider->value();
+            isStructuring = true;
+            break;
+        case OperationType::Dilate:
+            kernelSize = m_dilateKernelSlider->value();
+            isStructuring = true;
+            break;
+        case OperationType::MorphOpen:
+            kernelSize = m_morphOpenKernelSlider->value();
+            isStructuring = true;
+            break;
+        case OperationType::MorphClose:
+            kernelSize = m_morphCloseKernelSlider->value();
+            isStructuring = true;
+            break;
+        case OperationType::MorphGradient:
+            kernelSize = m_morphGradientKernelSlider->value();
+            isStructuring = true;
+            break;
+        case OperationType::TopHat:
+            kernelSize = m_topHatKernelSlider->value();
+            isStructuring = true;
+            break;
+        case OperationType::BlackHat:
+            kernelSize = m_blackHatKernelSlider->value();
+            isStructuring = true;
+            break;
+        case OperationType::AdaptiveThreshold:
+            kernelSize = 2 * m_adaptiveBlockSlider->value() + 3;
+            weightNote = "自适应阈值：拿这个邻域窗口算局部均值/高斯加权均值，再减常数C当作这个像素专属的阈值，不是普通卷积。";
+            break;
+        default:
+            break;
+        }
+
+        if (isStructuring) {
+            cv::Mat se = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(kernelSize, kernelSize));
+            se.convertTo(weightKernel, CV_64F);
+            weightNote = "当前用矩形结构元素(MORPH_RECT)，覆盖到的位置全部为1；换成十字形/椭圆形结构元素会看到0/1交替的图案。";
+        }
+
+        int dispN = std::min(kernelSize, 11);
+        if (dispN % 2 == 0)
+            dispN -= 1;
+        if (dispN < 1)
+            dispN = 1;
+        int half = dispN / 2;
+
+        QLabel *neighborTitle = new QLabel(
+            QString("【邻域/卷积运算 Neighborhood Operation】核大小 %1x%1%2")
+                .arg(kernelSize)
+                .arg(kernelSize > dispN ? QString("（表格只显示中间 %1x%1）").arg(dispN) : QString()),
+            &dialog);
+        neighborTitle->setWordWrap(true);
+        layout->addWidget(neighborTitle);
+
+        QLabel *neighborLabel =
+            new QLabel("原始邻域灰度值（为方便展示统一用灰度，实际三个通道各自独立运算）：", &dialog);
+        neighborLabel->setWordWrap(true);
+        layout->addWidget(neighborLabel);
+        QTableWidget *neighborGrid = makeGrid(dispN, dispN, [&](int r, int c) {
+            int gv = grayAt(px + (c - half), py + (r - half));
+            return gv < 0 ? QStringLiteral("—") : QString::number(gv);
+        });
+        layout->addWidget(neighborGrid);
+
+        if (!weightKernel.empty()) {
+            QLabel *kernelLabel = new QLabel(isStructuring ? "结构元素 (0/1)：" : "卷积核权重：", &dialog);
+            layout->addWidget(kernelLabel);
+            int kCenter = weightKernel.rows / 2;
+            QTableWidget *kernelGrid = makeGrid(dispN, dispN, [&](int r, int c) {
+                int rr = kCenter + (r - half);
+                int cc = kCenter + (c - half);
+                if (rr < 0 || cc < 0 || rr >= weightKernel.rows || cc >= weightKernel.cols)
+                    return QStringLiteral("—");
+                double v = weightKernel.at<double>(rr, cc);
+                return isStructuring ? QString::number(static_cast<int>(v)) : QString::number(v, 'f', 3);
+            });
+            layout->addWidget(kernelGrid);
+        }
+
+        if (!weightNote.isEmpty()) {
+            QLabel *noteLabel = new QLabel(weightNote, &dialog);
+            noteLabel->setWordWrap(true);
+            noteLabel->setStyleSheet("color:#616161; font-size:12px;");
+            layout->addWidget(noteLabel);
+        }
+
+        relatedTerms << "卷积核 / Kernel" << "锚点 (Anchor)" << "线性滤波 vs 非线性滤波";
+
+    } else {
+        QLabel *naLabel = new QLabel(
+            "该算子不是逐像素的邻域/卷积运算（比如是基于全局统计、特征匹配或几何变换的算法），"
+            "这里没有单点邻域数值可展示。可以去参数面板下方的代码面板看它的实际调用。",
+            &dialog);
+        naLabel->setWordWrap(true);
+        layout->addWidget(naLabel);
+    }
+
+    if (!relatedTerms.isEmpty()) {
+        QLabel *termsLabel =
+            new QLabel("相关术语：" + relatedTerms.join("、") + "（详见左侧“术语手册”）", &dialog);
+        termsLabel->setWordWrap(true);
+        termsLabel->setStyleSheet("color:#0078D4; font-size:12px; margin-top:8px;");
+        layout->addWidget(termsLabel);
+    }
+
+    layout->addStretch();
+
+    QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    dialog.exec();
 }
