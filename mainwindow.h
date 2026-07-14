@@ -69,6 +69,8 @@ enum class OperationType {
     Pyramid,
     // -- 轮廓 --
     Contours,
+    // -- 视频分析 --
+    BackgroundSubtraction,
 
     Count // 哨兵值，不对应任何算子
 };
@@ -123,6 +125,9 @@ private slots:
 private:
     // 点击原图触发：按当前算子展示"点运算"公式代入或"邻域/卷积"数值网格
     void showPixelInspector(int px, int py);
+
+    // 切到背景建模算子/加载新图片时调用，重新开始学习背景模型
+    void resetBackgroundSubtractor();
 
     Ui::MainWindow *ui;
 
@@ -262,6 +267,11 @@ private:
     QLabel *m_templateStatusLabel = nullptr;
 
     QSlider *m_pyramidLevelSlider = nullptr;
+
+    // 背景建模/运动检测
+    cv::Ptr<cv::BackgroundSubtractorMOG2> m_bgSubtractor;
+    QSlider *m_bgVarThresholdSlider = nullptr;
+    QSlider *m_bgLearningRateSlider = nullptr;
 
     // 模板匹配页面用户手动选择的模板图，为空时自动取原图中心裁剪代替
     cv::Mat m_templateMat;

@@ -273,6 +273,9 @@ void MainWindow::buildNavList()
 
     addHeader("轮廓");
     addOp("轮廓检测", OperationType::Contours);
+
+    addHeader("视频分析");
+    addOp("背景建模/运动检测", OperationType::BackgroundSubtraction);
 }
 
 void MainWindow::onNavRowChanged(int row)
@@ -298,6 +301,9 @@ void MainWindow::onNavRowChanged(int row)
     m_currentOpName = item->text();
     ui->paramsStack->setCurrentIndex(opIndex);
     ui->infoText->appendPlainText("切换算子: " + item->text());
+
+    if (m_currentOp == OperationType::BackgroundSubtraction)
+        resetBackgroundSubtractor();
 
     applyCurrentOperation();
 }
@@ -704,6 +710,20 @@ void MainWindow::applyCurrentOperation()
         code = QString("cv::findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);\n"
                         "// 面积 < %1 的轮廓被过滤掉")
                    .arg(minArea);
+        break;
+    }
+
+    case OperationType::BackgroundSubtraction: {
+        if (!m_bgSubtractor)
+            resetBackgroundSubtractor();
+        m_bgSubtractor->setVarThreshold(m_bgVarThresholdSlider->value());
+        double learningRate = m_bgLearningRateSlider->value() / 1000.0;
+        m_bgSubtractor->apply(m_originalMat, result, learningRate);
+        code = QString("static auto mog2 = cv::createBackgroundSubtractorMOG2();\n"
+                        "mog2->setVarThreshold(%1);\n"
+                        "mog2->apply(frame, fgMask, %2); // 白=前景(运动) 灰=阴影 黑=背景")
+                   .arg(m_bgVarThresholdSlider->value())
+                   .arg(learningRate, 0, 'f', 3);
         break;
     }
 
@@ -1259,6 +1279,23 @@ void MainWindow::buildParamPanels()
         layout->addStretch();
         ui->paramsStack->addWidget(page);
     }
+
+    // BackgroundSubtraction 背景建模/运动检测
+    {
+        QWidget *page = makePage(
+            "cv::BackgroundSubtractorMOG2：用高斯混合模型持续学习“背景长什么样”，和当前帧差别大的像素判定为前景(白)。"
+            "在单张静态图上意义有限——第一次调用时还没学到背景，整张图都会先被当成前景；"
+            "请切到左上角「摄像头实时」，对着场景保持几秒不动让它学会背景，再让人或物体入镜，才能看到真正的运动检测效果。",
+            "监控/安防的移动侦测报警、智能门铃的人体感应、客流统计，都是背景建模的直接应用。",
+            "");
+        QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
+        QLabel *varLabel = nullptr;
+        QLabel *rateLabel = nullptr;
+        m_bgVarThresholdSlider = addSliderRow(page, layout, "方差阈值", 4, 100, 16, &varLabel);
+        m_bgLearningRateSlider = addSliderRow(page, layout, "学习速度‰", 0, 100, 10, &rateLabel);
+        layout->addStretch();
+        ui->paramsStack->addWidget(page);
+    }
 }
 
 void MainWindow::showImage(const QString &path)
@@ -1279,8 +1316,14 @@ void MainWindow::showImage(const QString &path)
         QString("宽:%1 高:%2 通道:%3").arg(image.cols).arg(image.rows).arg(image.channels()));
 
     m_originalDisplayImage = OpenCVHelper::matToQImage(image);
+    resetBackgroundSubtractor(); // 换了新图片/新的一段视频源，背景模型要重新学
 
     applyCurrentOperation();
+}
+
+void MainWindow::resetBackgroundSubtractor()
+{
+    m_bgSubtractor = cv::createBackgroundSubtractorMOG2();
 }
 
 void MainWindow::onSourceModeChanged(bool cameraMode)
