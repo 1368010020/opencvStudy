@@ -1,11 +1,14 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QLabel>
 #include <QMainWindow>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QRect>
 #include <QSettings>
 #include <QSlider>
 #include <QTimer>
@@ -47,6 +50,7 @@ enum class OperationType {
     // -- 几何变换 --
     RotateScale,
     // -- 直方图 --
+    HistogramView,
     EqualizeHist,
     CLAHE,
     // -- 边缘与梯度 --
@@ -85,6 +89,9 @@ protected:
 
     void showEvent(QShowEvent *event) override;
 
+    // 给原图/结果图两个 QLabel 装的取色器：监听鼠标移动，反算像素坐标
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private slots:
 
     void openImage();
@@ -106,6 +113,9 @@ private slots:
 
     // 参数面板"加载推荐图片"按钮专属：加载 test_data 里的指定素材
     void loadRecommendedImage(const QString &filename);
+
+    // 保存当前处理结果到文件
+    void saveResult();
 
 private:
     Ui::MainWindow *ui;
@@ -140,8 +150,14 @@ private:
     // 打开的原始图片，处理算子只读它，永远不会被修改
     cv::Mat m_originalMat;
 
+    // 最近一次算出的处理结果，供取色器/保存按钮读取
+    cv::Mat m_lastResultMat;
+
     // 当前选中的算子
     OperationType m_currentOp = OperationType::Original;
+
+    // 当前选中算子的显示名（导航条目文字），用于在标题里拼耗时
+    QString m_currentOpName;
 
     /*
      * Qt显示数据
@@ -150,6 +166,17 @@ private:
     QImage m_originalDisplayImage;
 
     QImage m_processedDisplayImage;
+
+    // updateImageDisplay() 里记录的 pixmap 在 label 内的实际显示区域（居中+等比缩放留出的黑边要排除），
+    // 取色器反算鼠标位置对应的原图/结果图像素坐标时使用
+    QRect m_originalPixmapRect;
+    QRect m_processedPixmapRect;
+
+    // 常驻代码面板：显示当前算子对应的真实 OpenCV 调用（参数会替换成滑块当前值）
+    QPlainTextEdit *m_codeSnippetText = nullptr;
+
+    // 保存处理结果按钮
+    QPushButton *m_saveResultButton = nullptr;
 
     /*
      * 各算子参数控件

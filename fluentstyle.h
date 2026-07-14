@@ -209,6 +209,17 @@ inline QString styleSheet()
             color: #404040;
         }
 
+        /* ---- 代码面板：实时显示当前算子对应的真实 OpenCV 调用 ---- */
+        QPlainTextEdit#codeSnippetText {
+            background-color: #1E1E1E;
+            border: 1px solid #333333;
+            border-radius: 6px;
+            font-family: "Consolas", "Cascadia Mono", monospace;
+            font-size: 12px;
+            color: #D4D4D4;
+            padding: 4px;
+        }
+
         QSplitter::handle {
             background-color: #F3F3F3;
         }

@@ -6,9 +6,11 @@
 #include <QHBoxLayout>
 #include <QImage>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QResizeEvent>
 #include <QSizePolicy>
+#include <QStatusBar>
 
 #include "fluentstyle.h"
 #include "opencvhelper.h"
@@ -40,6 +42,12 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(ui->openImageButton, &QPushButton::clicked, this, &MainWindow::openImage);
 
+    // ---- 保存结果按钮：插在"打开图片"下面、导航列表上面 ----
+    m_saveResultButton = new QPushButton("保存结果...", ui->leftPanel);
+    m_saveResultButton->setProperty("variant", "secondary");
+    connect(m_saveResultButton, &QPushButton::clicked, this, &MainWindow::saveResult);
+    ui->leftPanelLayout->insertWidget(2, m_saveResultButton);
+
     // ---- 图片来源：静态图片 / 摄像头实时 ----
     m_staticImageRadio = ui->staticImageRadio;
     m_cameraRadio = ui->cameraRadio;
@@ -57,7 +65,25 @@ MainWindow::MainWindow(QWidget *parent)
     ui->processedImageLabel->setScaledContents(false);
     ui->processedImageLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
+    // 取色器：给两个图片 label 开鼠标追踪，交给 eventFilter 处理移动/离开事件
+    ui->originalImageLabel->setMouseTracking(true);
+    ui->processedImageLabel->setMouseTracking(true);
+    ui->originalImageLabel->installEventFilter(this);
+    ui->processedImageLabel->installEventFilter(this);
+
     buildParamPanels();
+
+    // ---- 常驻代码面板：显示当前算子对应的真实 OpenCV 调用 ----
+    QLabel *codeSnippetTitle = new QLabel("对应代码:", ui->rightPanel);
+    codeSnippetTitle->setProperty("role", "hint");
+    ui->rightPanelLayout->addWidget(codeSnippetTitle);
+
+    m_codeSnippetText = new QPlainTextEdit(ui->rightPanel);
+    m_codeSnippetText->setObjectName("codeSnippetText");
+    m_codeSnippetText->setReadOnly(true);
+    m_codeSnippetText->setMaximumHeight(110);
+    m_codeSnippetText->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    ui->rightPanelLayout->addWidget(m_codeSnippetText);
 
     // 三栏比例：左侧导航固定较窄，中间对比区自适应拉伸，右侧参数面板固定较窄
     ui->leftPanel->setMinimumWidth(190);
@@ -211,6 +237,7 @@ void MainWindow::buildNavList()
     addOp("旋转缩放", OperationType::RotateScale);
 
     addHeader("直方图");
+    addOp("直方图可视化", OperationType::HistogramView);
     addOp("直方图均衡化", OperationType::EqualizeHist);
     addOp("CLAHE自适应均衡", OperationType::CLAHE);
 
@@ -256,8 +283,8 @@ void MainWindow::onNavRowChanged(int row)
 
     int opIndex = item->data(kOpRole).toInt();
     m_currentOp = static_cast<OperationType>(opIndex);
+    m_currentOpName = item->text();
     ui->paramsStack->setCurrentIndex(opIndex);
-    ui->processedGroupBox->setTitle(QString("处理结果 - %1").arg(item->text()));
     ui->infoText->appendPlainText("切换算子: " + item->text());
 
     applyCurrentOperation();
@@ -268,37 +295,48 @@ void MainWindow::applyCurrentOperation()
     if (m_originalMat.empty())
         return;
 
+    QElapsedTimer timer;
+    timer.start();
+
     cv::Mat result;
     cv::Mat gray;
+    QString code;
 
     switch (m_currentOp) {
     case OperationType::Original:
         result = m_originalMat.clone();
+        code = "// 原图，未做任何处理";
         break;
 
     case OperationType::Invert:
         cv::bitwise_not(m_originalMat, result);
+        code = "cv::bitwise_not(src, dst);";
         break;
 
     case OperationType::Gray:
         cv::cvtColor(m_originalMat, result, cv::COLOR_BGR2GRAY);
+        code = "cv::cvtColor(src, dst, cv::COLOR_BGR2GRAY);";
         break;
 
     case OperationType::Threshold:
         cv::cvtColor(m_originalMat, gray, cv::COLOR_BGR2GRAY);
         cv::threshold(gray, result, m_thresholdSlider->value(), 255, cv::THRESH_BINARY);
+        code = QString("cv::threshold(gray, dst, %1, 255, cv::THRESH_BINARY);")
+                   .arg(m_thresholdSlider->value());
         break;
 
     case OperationType::GaussianBlur: {
         int kernel = 2 * m_blurKernelSlider->value() + 1;
         double sigma = m_blurSigmaSlider->value();
         cv::GaussianBlur(m_originalMat, result, cv::Size(kernel, kernel), sigma);
+        code = QString("cv::GaussianBlur(src, dst, cv::Size(%1,%1), %2);").arg(kernel).arg(sigma);
         break;
     }
 
     case OperationType::MedianBlur: {
         int kernel = 2 * m_medianKernelSlider->value() + 1;
         cv::medianBlur(m_originalMat, result, kernel);
+        code = QString("cv::medianBlur(src, dst, %1);").arg(kernel);
         break;
     }
 
@@ -306,12 +344,19 @@ void MainWindow::applyCurrentOperation()
         cv::bilateralFilter(m_originalMat, result, m_bilateralDiameterSlider->value(),
                              m_bilateralSigmaColorSlider->value(),
                              m_bilateralSigmaSpaceSlider->value());
+        code = QString("cv::bilateralFilter(src, dst, %1, %2, %3);")
+                   .arg(m_bilateralDiameterSlider->value())
+                   .arg(m_bilateralSigmaColorSlider->value())
+                   .arg(m_bilateralSigmaSpaceSlider->value());
         break;
 
     case OperationType::Erode: {
         cv::Mat kernel = cv::getStructuringElement(
             cv::MORPH_RECT, cv::Size(m_erodeKernelSlider->value(), m_erodeKernelSlider->value()));
         cv::erode(m_originalMat, result, kernel, cv::Point(-1, -1), m_erodeIterSlider->value());
+        code = QString("cv::erode(src, dst, kernel(%1x%1), Point(-1,-1), %2);")
+                   .arg(m_erodeKernelSlider->value())
+                   .arg(m_erodeIterSlider->value());
         break;
     }
 
@@ -319,6 +364,9 @@ void MainWindow::applyCurrentOperation()
         cv::Mat kernel = cv::getStructuringElement(
             cv::MORPH_RECT, cv::Size(m_dilateKernelSlider->value(), m_dilateKernelSlider->value()));
         cv::dilate(m_originalMat, result, kernel, cv::Point(-1, -1), m_dilateIterSlider->value());
+        code = QString("cv::dilate(src, dst, kernel(%1x%1), Point(-1,-1), %2);")
+                   .arg(m_dilateKernelSlider->value())
+                   .arg(m_dilateIterSlider->value());
         break;
     }
 
@@ -328,6 +376,9 @@ void MainWindow::applyCurrentOperation()
             cv::Size(m_morphOpenKernelSlider->value(), m_morphOpenKernelSlider->value()));
         cv::morphologyEx(m_originalMat, result, cv::MORPH_OPEN, kernel, cv::Point(-1, -1),
                           m_morphOpenIterSlider->value());
+        code = QString("cv::morphologyEx(src, dst, cv::MORPH_OPEN, kernel(%1x%1), Point(-1,-1), %2);")
+                   .arg(m_morphOpenKernelSlider->value())
+                   .arg(m_morphOpenIterSlider->value());
         break;
     }
 
@@ -337,6 +388,9 @@ void MainWindow::applyCurrentOperation()
             cv::Size(m_morphCloseKernelSlider->value(), m_morphCloseKernelSlider->value()));
         cv::morphologyEx(m_originalMat, result, cv::MORPH_CLOSE, kernel, cv::Point(-1, -1),
                           m_morphCloseIterSlider->value());
+        code = QString("cv::morphologyEx(src, dst, cv::MORPH_CLOSE, kernel(%1x%1), Point(-1,-1), %2);")
+                   .arg(m_morphCloseKernelSlider->value())
+                   .arg(m_morphCloseIterSlider->value());
         break;
     }
 
@@ -345,6 +399,8 @@ void MainWindow::applyCurrentOperation()
             cv::MORPH_RECT,
             cv::Size(m_morphGradientKernelSlider->value(), m_morphGradientKernelSlider->value()));
         cv::morphologyEx(m_originalMat, result, cv::MORPH_GRADIENT, kernel);
+        code = QString("cv::morphologyEx(src, dst, cv::MORPH_GRADIENT, kernel(%1x%1));")
+                   .arg(m_morphGradientKernelSlider->value());
         break;
     }
 
@@ -352,6 +408,8 @@ void MainWindow::applyCurrentOperation()
         cv::Mat kernel = cv::getStructuringElement(
             cv::MORPH_RECT, cv::Size(m_topHatKernelSlider->value(), m_topHatKernelSlider->value()));
         cv::morphologyEx(m_originalMat, result, cv::MORPH_TOPHAT, kernel);
+        code = QString("cv::morphologyEx(src, dst, cv::MORPH_TOPHAT, kernel(%1x%1));")
+                   .arg(m_topHatKernelSlider->value());
         break;
     }
 
@@ -360,6 +418,8 @@ void MainWindow::applyCurrentOperation()
             cv::MORPH_RECT,
             cv::Size(m_blackHatKernelSlider->value(), m_blackHatKernelSlider->value()));
         cv::morphologyEx(m_originalMat, result, cv::MORPH_BLACKHAT, kernel);
+        code = QString("cv::morphologyEx(src, dst, cv::MORPH_BLACKHAT, kernel(%1x%1));")
+                   .arg(m_blackHatKernelSlider->value());
         break;
     }
 
@@ -367,6 +427,7 @@ void MainWindow::applyCurrentOperation()
         // 故意不转回 BGR：直接把 HSV 三个通道当成 RGB 显示，
         // 让用户直观看到这是完全不同的一套三通道坐标系。
         cv::cvtColor(m_originalMat, result, cv::COLOR_BGR2HSV);
+        code = "cv::cvtColor(src, dst, cv::COLOR_BGR2HSV); // 故意不转回BGR，直接显示";
         break;
 
     case OperationType::ColorRange: {
@@ -381,6 +442,14 @@ void MainWindow::applyCurrentOperation()
                     mask);
         result = cv::Mat::zeros(m_originalMat.size(), m_originalMat.type());
         m_originalMat.copyTo(result, mask);
+        code = QString("cv::inRange(hsv, Scalar(%1,%2,%3), Scalar(%4,%5,%6), mask);\n"
+                        "src.copyTo(dst, mask);")
+                   .arg(m_colorRangeHLowSlider->value())
+                   .arg(m_colorRangeSLowSlider->value())
+                   .arg(m_colorRangeVLowSlider->value())
+                   .arg(m_colorRangeHHighSlider->value())
+                   .arg(m_colorRangeSHighSlider->value())
+                   .arg(m_colorRangeVHighSlider->value());
         break;
     }
 
@@ -391,12 +460,48 @@ void MainWindow::applyCurrentOperation()
         cv::Mat rotMat = cv::getRotationMatrix2D(center, angle, scale);
         cv::warpAffine(m_originalMat, result, rotMat, m_originalMat.size(), cv::INTER_LINEAR,
                         cv::BORDER_CONSTANT, cv::Scalar(240, 240, 240));
+        code = QString("Mat rot = cv::getRotationMatrix2D(center, %1, %2);\n"
+                        "cv::warpAffine(src, dst, rot, src.size());")
+                   .arg(angle)
+                   .arg(scale);
+        break;
+    }
+
+    case OperationType::HistogramView: {
+        // 分别统计 B/G/R 三个通道的直方图，归一化后画成三条折线，
+        // 用来直观看清"直方图均衡化/CLAHE"到底在拉伸什么。
+        std::vector<cv::Mat> channels;
+        cv::split(m_originalMat, channels);
+
+        const int histSize = 256;
+        float range[] = {0, 256};
+        const float *histRange = {range};
+        const int canvasW = 512, canvasH = 300;
+        result = cv::Mat(canvasH, canvasW, CV_8UC3, cv::Scalar(30, 30, 30));
+
+        cv::Scalar colors[3] = {cv::Scalar(255, 90, 90), cv::Scalar(90, 220, 90),
+                                 cv::Scalar(90, 90, 255)}; // 分别对应 B/G/R
+        int binWidth = cvRound(static_cast<double>(canvasW) / histSize);
+        int channelIdx[] = {0}; // channels[c] 本身已经是单通道 Mat，固定取第0通道
+        for (int c = 0; c < 3; ++c) {
+            cv::Mat hist;
+            cv::calcHist(&channels[c], 1, channelIdx, cv::Mat(), hist, 1, &histSize, &histRange);
+            cv::normalize(hist, hist, 0, canvasH, cv::NORM_MINMAX);
+            for (int i = 1; i < histSize; ++i) {
+                cv::line(result,
+                         cv::Point(binWidth * (i - 1), canvasH - cvRound(hist.at<float>(i - 1))),
+                         cv::Point(binWidth * i, canvasH - cvRound(hist.at<float>(i))), colors[c], 2);
+            }
+        }
+        code = "cv::calcHist(&channel, 1, 0, Mat(), hist, 1, &histSize, &range);\n"
+               "cv::normalize(hist, hist, 0, canvasH, cv::NORM_MINMAX); // 对 B/G/R 各做一次";
         break;
     }
 
     case OperationType::EqualizeHist:
         cv::cvtColor(m_originalMat, gray, cv::COLOR_BGR2GRAY);
         cv::equalizeHist(gray, result);
+        code = "cv::equalizeHist(gray, dst);";
         break;
 
     case OperationType::CLAHE: {
@@ -405,6 +510,9 @@ void MainWindow::applyCurrentOperation()
         int tile = m_claheTileSlider->value();
         cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(clipLimit, cv::Size(tile, tile));
         clahe->apply(gray, result);
+        code = QString("auto clahe = cv::createCLAHE(%1, cv::Size(%2,%2));\nclahe->apply(gray, dst);")
+                   .arg(clipLimit)
+                   .arg(tile);
         break;
     }
 
@@ -417,6 +525,10 @@ void MainWindow::applyCurrentOperation()
         cv::convertScaleAbs(gradX, absX);
         cv::convertScaleAbs(gradY, absY);
         cv::addWeighted(absX, 0.5, absY, 0.5, 0, result);
+        code = QString("cv::Sobel(gray, gradX, CV_16S, 1, 0, %1);\n"
+                        "cv::Sobel(gray, gradY, CV_16S, 0, 1, %1);\n"
+                        "cv::addWeighted(absX, 0.5, absY, 0.5, 0, dst);")
+                   .arg(ksize);
         break;
     }
 
@@ -426,12 +538,17 @@ void MainWindow::applyCurrentOperation()
         cv::Mat lap;
         cv::Laplacian(gray, lap, CV_16S, ksize);
         cv::convertScaleAbs(lap, result);
+        code = QString("cv::Laplacian(gray, lap, CV_16S, %1);\ncv::convertScaleAbs(lap, dst);")
+                   .arg(ksize);
         break;
     }
 
     case OperationType::Canny:
         cv::cvtColor(m_originalMat, gray, cv::COLOR_BGR2GRAY);
         cv::Canny(gray, result, m_cannyLowSlider->value(), m_cannyHighSlider->value());
+        code = QString("cv::Canny(gray, dst, %1, %2);")
+                   .arg(m_cannyLowSlider->value())
+                   .arg(m_cannyHighSlider->value());
         break;
 
     case OperationType::HoughLines: {
@@ -447,6 +564,10 @@ void MainWindow::applyCurrentOperation()
         for (const cv::Vec4i &l : lines) {
             cv::line(result, cv::Point(l[0], l[1]), cv::Point(l[2], l[3]), cv::Scalar(0, 220, 0), 2);
         }
+        code = QString("cv::HoughLinesP(edges, lines, 1, CV_PI/180, %1, %2, %3);")
+                   .arg(m_houghLinesThresholdSlider->value())
+                   .arg(m_houghLinesMinLengthSlider->value())
+                   .arg(m_houghLinesMaxGapSlider->value());
         break;
     }
 
@@ -467,6 +588,12 @@ void MainWindow::applyCurrentOperation()
             cv::circle(result, center, radius, cv::Scalar(0, 140, 255), 2);
             cv::circle(result, center, 2, cv::Scalar(0, 0, 220), 3);
         }
+        code = QString("cv::HoughCircles(gray, circles, HOUGH_GRADIENT, 1, %1, %2, %3, %4, %5);")
+                   .arg(m_houghCirclesMinDistSlider->value())
+                   .arg(m_houghCirclesParam1Slider->value())
+                   .arg(m_houghCirclesParam2Slider->value())
+                   .arg(m_houghCirclesMinRadiusSlider->value())
+                   .arg(maxRadius);
         break;
     }
 
@@ -475,12 +602,17 @@ void MainWindow::applyCurrentOperation()
         int blockSize = 2 * m_adaptiveBlockSlider->value() + 3; // 至少为3，且为奇数
         cv::adaptiveThreshold(gray, result, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C,
                                cv::THRESH_BINARY, blockSize, m_adaptiveCSlider->value());
+        code = QString("cv::adaptiveThreshold(gray, dst, 255, ADAPTIVE_THRESH_GAUSSIAN_C,\n"
+                        "                      THRESH_BINARY, %1, %2);")
+                   .arg(blockSize)
+                   .arg(m_adaptiveCSlider->value());
         break;
     }
 
     case OperationType::OtsuThreshold:
         cv::cvtColor(m_originalMat, gray, cv::COLOR_BGR2GRAY);
         cv::threshold(gray, result, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+        code = "cv::threshold(gray, dst, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);";
         break;
 
     case OperationType::OrbKeypoints: {
@@ -489,12 +621,15 @@ void MainWindow::applyCurrentOperation()
         orb->detect(m_originalMat, keypoints);
         cv::drawKeypoints(m_originalMat, keypoints, result, cv::Scalar(0, 220, 0),
                            cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+        code = QString("auto orb = cv::ORB::create(%1);\norb->detect(src, keypoints);")
+                   .arg(m_orbFeaturesSlider->value());
         break;
     }
 
     case OperationType::TemplateMatch: {
         cv::Mat tmpl;
-        if (!m_templateMat.empty()) {
+        bool autoCrop = m_templateMat.empty();
+        if (!autoCrop) {
             tmpl = m_templateMat;
         } else {
             // 没手动选模板时，自动取原图中心一块当模板，保证一打开就有效果
@@ -515,6 +650,9 @@ void MainWindow::applyCurrentOperation()
             cv::minMaxLoc(scoreMap, &minVal, &maxVal, &minLoc, &maxLoc);
             cv::rectangle(result, cv::Rect(maxLoc, tmpl.size()), cv::Scalar(0, 140, 255), 2);
         }
+        code = QString("cv::matchTemplate(src, tmpl, score, cv::TM_CCOEFF_NORMED);\n"
+                        "cv::minMaxLoc(score, ..., &maxLoc); // tmpl%1")
+                   .arg(autoCrop ? "=原图中心裁剪" : "=手动选择的图片");
         break;
     }
 
@@ -529,6 +667,8 @@ void MainWindow::applyCurrentOperation()
         if (pyr.size() != m_originalMat.size())
             cv::resize(pyr, pyr, m_originalMat.size());
         result = pyr;
+        code = QString("for (i < %1) cv::pyrDown(img, img);\nfor (i < %1) cv::pyrUp(img, img);")
+                   .arg(levels);
         break;
     }
 
@@ -549,6 +689,9 @@ void MainWindow::applyCurrentOperation()
             cv::Rect box = cv::boundingRect(contours[i]);
             cv::rectangle(result, box, cv::Scalar(0, 140, 255), 1);
         }
+        code = QString("cv::findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);\n"
+                        "// 面积 < %1 的轮廓被过滤掉")
+                   .arg(minArea);
         break;
     }
 
@@ -556,8 +699,15 @@ void MainWindow::applyCurrentOperation()
         return;
     }
 
+    m_lastResultMat = result;
     m_processedDisplayImage = OpenCVHelper::matToQImage(result);
     updateImageDisplay();
+
+    double elapsedMs = timer.nsecsElapsed() / 1e6;
+    ui->processedGroupBox->setTitle(
+        QString("处理结果 - %1 (%2 ms)").arg(m_currentOpName).arg(elapsedMs, 0, 'f', 2));
+    if (m_codeSnippetText)
+        m_codeSnippetText->setPlainText(code);
 }
 
 QSlider *MainWindow::addSliderRow(QWidget *page, QVBoxLayout *layout, const QString &labelText,
@@ -871,6 +1021,18 @@ void MainWindow::buildParamPanels()
         ui->paramsStack->addWidget(page);
     }
 
+    // HistogramView 直方图可视化
+    {
+        QWidget *page = makePage(
+            "cv::calcHist：分别统计 B/G/R 三个通道里每个亮度值(0-255)出现的像素数量，画成三条折线——"
+            "横轴是亮度、纵轴是像素数量。这是理解下面均衡化/CLAHE两个算子的基础，无可调参数。",
+            "调色、曝光分析类软件（比如 Photoshop/Lightroom 的直方图面板）的底层原理，"
+            "拍照时判断画面是否过曝/欠曝也是看直方图。",
+            "low_contrast_scene.png");
+        static_cast<QVBoxLayout *>(page->layout())->addStretch();
+        ui->paramsStack->addWidget(page);
+    }
+
     // EqualizeHist 直方图均衡化
     {
         QWidget *page = makePage(
@@ -1154,6 +1316,11 @@ void MainWindow::updateImageDisplay()
             QPixmap pix = QPixmap::fromImage(m_originalDisplayImage)
                               .scaled(labelSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
             ui->originalImageLabel->setPixmap(pix);
+            // KeepAspectRatio 缩放后 pixmap 可能比 label 小（留黑边），取色器反算坐标要基于
+            // pixmap 在 label 内实际居中显示的区域，而不是整个 label 区域。
+            m_originalPixmapRect = QRect(QPoint((labelSize.width() - pix.width()) / 2,
+                                                 (labelSize.height() - pix.height()) / 2),
+                                          pix.size());
         }
     }
 
@@ -1163,6 +1330,9 @@ void MainWindow::updateImageDisplay()
             QPixmap pix = QPixmap::fromImage(m_processedDisplayImage)
                               .scaled(labelSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
             ui->processedImageLabel->setPixmap(pix);
+            m_processedPixmapRect = QRect(QPoint((labelSize.width() - pix.width()) / 2,
+                                                  (labelSize.height() - pix.height()) / 2),
+                                           pix.size());
         }
     }
 }
@@ -1214,4 +1384,75 @@ void MainWindow::showEvent(QShowEvent *event)
             ui->infoText->appendPlainText("已自动加载示例图片，随时可点『打开图片』换成你自己的图");
         }
     }
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    bool isOriginalLabel = (watched == ui->originalImageLabel);
+    bool isProcessedLabel = (watched == ui->processedImageLabel);
+
+    if (isOriginalLabel || isProcessedLabel) {
+        if (event->type() == QEvent::MouseMove) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            const cv::Mat &mat = isOriginalLabel ? m_originalMat : m_lastResultMat;
+            const QRect &pixmapRect = isOriginalLabel ? m_originalPixmapRect : m_processedPixmapRect;
+
+            if (!mat.empty() && pixmapRect.contains(mouseEvent->pos())) {
+                double fx = static_cast<double>(mouseEvent->pos().x() - pixmapRect.left())
+                            / pixmapRect.width();
+                double fy = static_cast<double>(mouseEvent->pos().y() - pixmapRect.top())
+                            / pixmapRect.height();
+                int px = std::clamp(static_cast<int>(fx * mat.cols), 0, mat.cols - 1);
+                int py = std::clamp(static_cast<int>(fy * mat.rows), 0, mat.rows - 1);
+
+                QString text;
+                if (mat.channels() == 1) {
+                    int gray = mat.at<uchar>(py, px);
+                    text = QString("像素(%1,%2)  灰度值: %3").arg(px).arg(py).arg(gray);
+                } else {
+                    cv::Vec3b bgr = mat.at<cv::Vec3b>(py, px);
+                    cv::Mat pixel(1, 1, CV_8UC3, cv::Scalar(bgr[0], bgr[1], bgr[2]));
+                    cv::Mat hsvPixel;
+                    cv::cvtColor(pixel, hsvPixel, cv::COLOR_BGR2HSV);
+                    cv::Vec3b hsv = hsvPixel.at<cv::Vec3b>(0, 0);
+                    text = QString("像素(%1,%2)  BGR(%3,%4,%5)  HSV(%6,%7,%8)")
+                               .arg(px)
+                               .arg(py)
+                               .arg(bgr[0])
+                               .arg(bgr[1])
+                               .arg(bgr[2])
+                               .arg(hsv[0])
+                               .arg(hsv[1])
+                               .arg(hsv[2]);
+                }
+                statusBar()->showMessage(text);
+            } else {
+                statusBar()->clearMessage();
+            }
+        } else if (event->type() == QEvent::Leave) {
+            statusBar()->clearMessage();
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::saveResult()
+{
+    if (m_lastResultMat.empty()) {
+        ui->infoText->appendPlainText("还没有可保存的处理结果，先打开一张图片试试算子吧");
+        return;
+    }
+
+    QString defaultPath = m_lastOpenDir.isEmpty() ? "result.png" : (m_lastOpenDir + "/result.png");
+    QString filename = QFileDialog::getSaveFileName(this, "保存处理结果", defaultPath,
+                                                      "PNG (*.png);;JPEG (*.jpg)");
+    if (filename.isEmpty())
+        return;
+
+    bool ok = cv::imwrite(filename.toLocal8Bit().toStdString(), m_lastResultMat);
+    if (ok)
+        ui->infoText->appendPlainText("已保存: " + filename);
+    else
+        ui->infoText->appendPlainText("保存失败: " + filename);
 }
