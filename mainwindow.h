@@ -104,10 +104,10 @@ private slots:
     // 唯一的重算入口：基于 m_originalMat + 当前算子的滑块参数重新计算处理结果
     void applyCurrentOperation();
 
-    // 静态图片 / 摄像头实时 切换
-    void onSourceModeChanged(bool cameraMode);
+    // 静态图片 / 摄像头实时 / 视频文件 三者切换（不用参数，内部读三个 radio 的选中状态）
+    void onSourceModeChanged();
 
-    // 摄像头定时取帧
+    // 摄像头/视频定时取帧
     void onCameraFrame();
 
     // 模板匹配页面专属：选择模板图片
@@ -282,6 +282,7 @@ private:
 
     QRadioButton *m_staticImageRadio = nullptr;
     QRadioButton *m_cameraRadio = nullptr;
+    QRadioButton *m_videoFileRadio = nullptr;
 
     QTimer *m_cameraTimer = nullptr;
     cv::VideoCapture m_capture;

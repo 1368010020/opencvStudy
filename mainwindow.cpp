@@ -60,10 +60,14 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_glossaryButton, &QPushButton::clicked, this, &MainWindow::showTermsGlossary);
     ui->leftPanelLayout->insertWidget(3, m_glossaryButton);
 
-    // ---- 图片来源：静态图片 / 摄像头实时 ----
+    // ---- 图片来源：静态图片 / 摄像头实时 / 视频文件 ----
     m_staticImageRadio = ui->staticImageRadio;
     m_cameraRadio = ui->cameraRadio;
-    connect(ui->cameraRadio, &QRadioButton::toggled, this, &MainWindow::onSourceModeChanged);
+    m_videoFileRadio = new QRadioButton("视频文件", ui->leftPanel);
+    ui->sourceModeLayout->addWidget(m_videoFileRadio);
+    connect(m_staticImageRadio, &QRadioButton::toggled, this, &MainWindow::onSourceModeChanged);
+    connect(m_cameraRadio, &QRadioButton::toggled, this, &MainWindow::onSourceModeChanged);
+    connect(m_videoFileRadio, &QRadioButton::toggled, this, &MainWindow::onSourceModeChanged);
 
     m_cameraTimer = new QTimer(this);
     connect(m_cameraTimer, &QTimer::timeout, this, &MainWindow::onCameraFrame);
@@ -129,7 +133,7 @@ MainWindow::~MainWindow()
 
 void MainWindow::openImage()
 {
-    if (m_cameraRadio->isChecked())
+    if (!m_staticImageRadio->isChecked())
         return;
 
     QString filename = QFileDialog::getOpenFileName(this,
@@ -1326,14 +1330,15 @@ void MainWindow::resetBackgroundSubtractor()
     m_bgSubtractor = cv::createBackgroundSubtractorMOG2();
 }
 
-void MainWindow::onSourceModeChanged(bool cameraMode)
+void MainWindow::onSourceModeChanged()
 {
-    if (!cameraMode) {
-        m_cameraTimer->stop();
-        if (m_capture.isOpened())
-            m_capture.release();
-        ui->openImageButton->setEnabled(true);
+    // 每次切换先统一停掉上一个来源（摄像头/视频）
+    m_cameraTimer->stop();
+    if (m_capture.isOpened())
+        m_capture.release();
 
+    if (m_staticImageRadio->isChecked()) {
+        ui->openImageButton->setEnabled(true);
         if (!m_lastImagePath.isEmpty())
             showImage(m_lastImagePath);
         return;
@@ -1341,21 +1346,50 @@ void MainWindow::onSourceModeChanged(bool cameraMode)
 
     ui->openImageButton->setEnabled(false);
 
-    if (!m_capture.open(0)) {
-        ui->infoText->appendPlainText("摄像头打开失败，请检查设备是否可用或被其他程序占用");
-        m_staticImageRadio->setChecked(true); // 会重新触发本槽走 !cameraMode 分支，完成回退
+    if (m_cameraRadio->isChecked()) {
+        if (!m_capture.open(0)) {
+            ui->infoText->appendPlainText("摄像头打开失败，请检查设备是否可用或被其他程序占用");
+            m_staticImageRadio->setChecked(true); // 会重新触发本槽走静态图片分支，完成回退
+            return;
+        }
+        ui->infoText->appendPlainText("摄像头已打开，开始实时预览");
+        m_cameraTimer->start(33);
         return;
     }
 
-    ui->infoText->appendPlainText("摄像头已打开，开始实时预览");
-    m_cameraTimer->start(33);
+    // 视频文件模式：弹窗选一个视频文件，循环播放，方便没有摄像头时也能测摄像头相关算子
+    // （比如背景建模/运动检测，本质上就是"喂给同一套逐帧处理逻辑一段连续帧"，不关心帧的来源）
+    QString filename = QFileDialog::getOpenFileName(
+        this, "选择视频文件", m_lastOpenDir, "Videos (*.mp4 *.avi *.mov *.mkv *.wmv *.flv)");
+    if (filename.isEmpty()) {
+        m_staticImageRadio->setChecked(true);
+        return;
+    }
+
+    if (!m_capture.open(filename.toLocal8Bit().toStdString())) {
+        ui->infoText->appendPlainText("视频打开失败: " + filename);
+        m_staticImageRadio->setChecked(true);
+        return;
+    }
+
+    QFileInfo fileInfo(filename);
+    m_lastOpenDir = fileInfo.absolutePath();
+    ui->infoText->appendPlainText("视频已打开，循环播放: " + filename);
+
+    double fps = m_capture.get(cv::CAP_PROP_FPS);
+    int interval = (fps > 1.0 && fps < 240.0) ? static_cast<int>(1000.0 / fps) : 33;
+    m_cameraTimer->start(interval);
 }
 
 void MainWindow::onCameraFrame()
 {
     cv::Mat frame;
-    if (!m_capture.read(frame) || frame.empty())
+    if (!m_capture.read(frame) || frame.empty()) {
+        // 视频播完了：跳回第0帧循环播放；摄像头掉帧则什么都不做，等下一次定时器
+        if (m_videoFileRadio->isChecked() && m_capture.isOpened())
+            m_capture.set(cv::CAP_PROP_POS_FRAMES, 0);
         return;
+    }
 
     m_originalMat = frame.clone();
     m_originalDisplayImage = OpenCVHelper::matToQImage(frame);
