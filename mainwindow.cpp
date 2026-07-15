@@ -280,6 +280,9 @@ void MainWindow::buildNavList()
 
     addHeader("视频分析");
     addOp("背景建模/运动检测", OperationType::BackgroundSubtraction);
+
+    addHeader("目标检测");
+    addOp("人脸检测", OperationType::FaceDetection);
 }
 
 void MainWindow::onNavRowChanged(int row)
@@ -728,6 +731,42 @@ void MainWindow::applyCurrentOperation()
                         "mog2->apply(frame, fgMask, %2); // 白=前景(运动) 灰=阴影 黑=背景")
                    .arg(m_bgVarThresholdSlider->value())
                    .arg(learningRate, 0, 'f', 3);
+        break;
+    }
+
+    case OperationType::FaceDetection: {
+        result = m_originalMat.clone();
+        if (!ensureFaceCascadesLoaded()) {
+            code = "// 级联文件加载失败，看信息日志";
+            break;
+        }
+
+        cv::cvtColor(m_originalMat, gray, cv::COLOR_BGR2GRAY);
+        cv::equalizeHist(gray, gray);
+
+        double scaleFactor = m_faceScaleSlider->value() / 100.0;
+        int minNeighbors = m_faceMinNeighborsSlider->value();
+
+        std::vector<cv::Rect> faces;
+        m_faceCascade.detectMultiScale(gray, faces, scaleFactor, minNeighbors, 0, cv::Size(30, 30));
+
+        for (const cv::Rect &face : faces) {
+            cv::rectangle(result, face, cv::Scalar(0, 220, 0), 2);
+
+            cv::Mat faceRoiGray = gray(face);
+            std::vector<cv::Rect> eyes;
+            m_eyeCascade.detectMultiScale(faceRoiGray, eyes, 1.1, 6, 0, cv::Size(15, 15));
+            for (const cv::Rect &eye : eyes) {
+                cv::Rect eyeInFull(face.x + eye.x, face.y + eye.y, eye.width, eye.height);
+                cv::rectangle(result, eyeInFull, cv::Scalar(0, 220, 220), 2);
+            }
+        }
+
+        code = QString("cv::CascadeClassifier face(\"haarcascade_frontalface_default.xml\");\n"
+                        "face.detectMultiScale(gray, faces, %1, %2);\n"
+                        "// 每个 face 区域内再跑一次 eye.detectMultiScale(gray(face), eyes, ...)")
+                   .arg(scaleFactor, 0, 'f', 2)
+                   .arg(minNeighbors);
         break;
     }
 
@@ -1300,6 +1339,24 @@ void MainWindow::buildParamPanels()
         layout->addStretch();
         ui->paramsStack->addWidget(page);
     }
+
+    // FaceDetection 人脸检测
+    {
+        QWidget *page = makePage(
+            "cv::CascadeClassifier + Haar级联：用大量正/负样本训练出的一系列简单矩形特征分类器级联而成，"
+            "在图像上多尺度滑动窗口快速排除非人脸区域。检测到人脸(绿框)后，会在人脸区域内再跑一次"
+            "眼睛级联(黄框)——这是目标检测里常见的\"先粗定位、再在ROI里精检测\"套路。",
+            "门禁/考勤的人脸打卡、相机的自动对焦选人脸、相册的人脸分组，早期方案基本都是这一套 Haar 级联。",
+            "pexels-wenchengphoto-7161260.jpg");
+        QVBoxLayout *layout = static_cast<QVBoxLayout *>(page->layout());
+        QLabel *scaleLabel = nullptr;
+        QLabel *neighborsLabel = nullptr;
+        // 滑块 105-140 表示 scaleFactor 1.05-1.40
+        m_faceScaleSlider = addSliderRow(page, layout, "缩放步长‰", 105, 140, 110, &scaleLabel);
+        m_faceMinNeighborsSlider = addSliderRow(page, layout, "最小邻居数", 1, 10, 5, &neighborsLabel);
+        layout->addStretch();
+        ui->paramsStack->addWidget(page);
+    }
 }
 
 void MainWindow::showImage(const QString &path)
@@ -1328,6 +1385,33 @@ void MainWindow::showImage(const QString &path)
 void MainWindow::resetBackgroundSubtractor()
 {
     m_bgSubtractor = cv::createBackgroundSubtractorMOG2();
+}
+
+bool MainWindow::ensureFaceCascadesLoaded()
+{
+    if (m_faceCascadeLoadAttempted)
+        return m_faceCascadeLoadOk;
+
+    m_faceCascadeLoadAttempted = true;
+
+    QString facePath = resolveTestDataPath("haarcascade_frontalface_default.xml");
+    QString eyePath = resolveTestDataPath("haarcascade_eye.xml");
+
+    if (facePath.isEmpty() || eyePath.isEmpty()) {
+        ui->infoText->appendPlainText("找不到人脸/眼睛级联文件，请确认 test_data 目录里有对应的 xml");
+        return false;
+    }
+
+    bool faceOk = m_faceCascade.load(facePath.toLocal8Bit().toStdString());
+    bool eyeOk = m_eyeCascade.load(eyePath.toLocal8Bit().toStdString());
+
+    if (!faceOk || !eyeOk) {
+        ui->infoText->appendPlainText("人脸/眼睛级联文件加载失败，文件可能损坏");
+        return false;
+    }
+
+    m_faceCascadeLoadOk = true;
+    return true;
 }
 
 void MainWindow::onSourceModeChanged()

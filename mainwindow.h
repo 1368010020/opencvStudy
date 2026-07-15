@@ -71,6 +71,8 @@ enum class OperationType {
     Contours,
     // -- 视频分析 --
     BackgroundSubtraction,
+    // -- 目标检测 --
+    FaceDetection,
 
     Count // 哨兵值，不对应任何算子
 };
@@ -128,6 +130,9 @@ private:
 
     // 切到背景建模算子/加载新图片时调用，重新开始学习背景模型
     void resetBackgroundSubtractor();
+
+    // 懒加载人脸/眼睛 Haar 级联分类器，成功返回true；找不到xml文件只会失败一次并记日志，不重复报错
+    bool ensureFaceCascadesLoaded();
 
     Ui::MainWindow *ui;
 
@@ -272,6 +277,14 @@ private:
     cv::Ptr<cv::BackgroundSubtractorMOG2> m_bgSubtractor;
     QSlider *m_bgVarThresholdSlider = nullptr;
     QSlider *m_bgLearningRateSlider = nullptr;
+
+    // 人脸检测
+    cv::CascadeClassifier m_faceCascade;
+    cv::CascadeClassifier m_eyeCascade;
+    bool m_faceCascadeLoadAttempted = false;
+    bool m_faceCascadeLoadOk = false;
+    QSlider *m_faceScaleSlider = nullptr;
+    QSlider *m_faceMinNeighborsSlider = nullptr;
 
     // 模板匹配页面用户手动选择的模板图，为空时自动取原图中心裁剪代替
     cv::Mat m_templateMat;
