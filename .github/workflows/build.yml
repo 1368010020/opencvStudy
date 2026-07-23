@@ -49,19 +49,34 @@ jobs:
       - name: Build
         run: cmake --build build/release --config Release --parallel
 
+      # CMake 没指定 -G，Windows 上默认选中的是多配置的 Visual Studio 生成器，
+      # 它会自动在 RUNTIME_OUTPUT_DIRECTORY 下面再加一层 Release/Debug 子目录，
+      # 项目的 CMakeLists.txt 里设的输出目录没考虑这层，实际路径会漂移。
+      # 与其硬编码猜测子目录名，不如递归找到真实产物所在目录，更抗生成器差异。
+      - name: Locate build output
+        id: locate
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "build\release" -Recurse -Filter "OpenCVPractice.exe" | Select-Object -First 1
+          if (-not $exe) {
+            throw "OpenCVPractice.exe not found anywhere under build\release"
+          }
+          Write-Host "Found exe at: $($exe.FullName)"
+          echo "bin_dir=$($exe.DirectoryName)" >> $env:GITHUB_OUTPUT
+
       - name: Bundle Qt runtime DLLs
         run: |
-          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-translations build\release\bin\OpenCVPractice.exe
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-translations "${{ steps.locate.outputs.bin_dir }}\OpenCVPractice.exe"
         shell: pwsh
 
       - name: Bundle OpenCV / vcpkg runtime DLLs
         run: |
-          Copy-Item "build\release\vcpkg_installed\x64-windows\bin\*.dll" "build\release\bin\" -Force
+          Copy-Item "build\release\vcpkg_installed\x64-windows\bin\*.dll" "${{ steps.locate.outputs.bin_dir }}\" -Force
         shell: pwsh
 
       - name: Package zip
         run: |
-          Compress-Archive -Path "build\release\bin\*" -DestinationPath "OpenCVPractice-windows-x64.zip" -Force
+          Compress-Archive -Path "${{ steps.locate.outputs.bin_dir }}\*" -DestinationPath "OpenCVPractice-windows-x64.zip" -Force
         shell: pwsh
 
       - name: Upload build artifact
